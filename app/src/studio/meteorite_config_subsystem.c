@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <zephyr/logging/log.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
@@ -21,13 +22,20 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 #include <zmk/keymap.h>
 #include <zmk/studio/rpc.h>
 
-#define METEORITE_CONFIG_SCHEMA_VERSION 1
-#define METEORITE_CONFIG_FEATURE_VERSION "1.0.0"
+#define METEORITE_CONFIG_SCHEMA_VERSION 2
+#define METEORITE_CONFIG_FEATURE_VERSION "1.1.0"
 
 ZMK_RPC_SUBSYSTEM(meteorite)
 
 #define METEORITE_RESPONSE(type, ...) ZMK_RPC_RESPONSE(meteorite, type, __VA_ARGS__)
 #define METEORITE_NOTIFICATION(type, ...) ZMK_RPC_NOTIFICATION(meteorite, type, __VA_ARGS__)
+
+#define METEORITE_ENCODER_COMPAT zmk_behavior_meteorite_encoder
+
+#if DT_HAS_COMPAT_STATUS_OKAY(METEORITE_ENCODER_COMPAT)
+#define METEORITE_ENCODER_NODE DT_COMPAT_GET_ANY_STATUS_OKAY(METEORITE_ENCODER_COMPAT)
+static const uint16_t meteorite_encoder_slots[] = DT_PROP(METEORITE_ENCODER_NODE, slots);
+#endif
 
 enum meteorite_option_kind {
     METEORITE_OPTIONS_NONE,
@@ -170,6 +178,63 @@ static bool encode_string(pb_ostream_t *stream, const pb_field_t *field, void *c
     }
 
     return pb_encode_string(stream, value, strlen(value));
+}
+
+static zmk_meteorite_EncoderSide encoder_side_for_sensor(size_t sensor_index) {
+    return sensor_index == 0 ? zmk_meteorite_EncoderSide_ENCODER_SIDE_LEFT
+                             : zmk_meteorite_EncoderSide_ENCODER_SIDE_RIGHT;
+}
+
+static zmk_meteorite_EncoderDirection encoder_direction_for_slot_offset(size_t slot_offset) {
+    return (slot_offset % 2) == 0
+               ? zmk_meteorite_EncoderDirection_ENCODER_DIRECTION_CW
+               : zmk_meteorite_EncoderDirection_ENCODER_DIRECTION_CCW;
+}
+
+static const char *encoder_side_name(size_t sensor_index) {
+    return sensor_index == 0 ? "Left" : "Right";
+}
+
+static const char *encoder_direction_name(size_t slot_offset) {
+    return (slot_offset % 2) == 0 ? "CW" : "CCW";
+}
+
+static bool encode_encoder_slot(pb_ostream_t *stream, const pb_field_t *field, uint32_t position,
+                                size_t slot_offset) {
+    const size_t sensor_index = slot_offset / 2;
+    char label[32];
+    snprintf(label, sizeof(label), "%s Encoder %s", encoder_side_name(sensor_index),
+             encoder_direction_name(slot_offset));
+
+    zmk_meteorite_EncoderSlot slot = zmk_meteorite_EncoderSlot_init_zero;
+
+    slot.position = position;
+    slot.side = encoder_side_for_sensor(sensor_index);
+    slot.direction = encoder_direction_for_slot_offset(slot_offset);
+    slot.sensor_index = sensor_index;
+    slot.slot_offset = slot_offset;
+    slot.label.funcs.encode = encode_string;
+    slot.label.arg = (void *)label;
+
+    if (!pb_encode_tag_for_field(stream, field)) {
+        return false;
+    }
+
+    return pb_encode_submessage(stream, &zmk_meteorite_EncoderSlot_msg, &slot);
+}
+
+static bool encode_encoder_slots(pb_ostream_t *stream, const pb_field_t *field, void *const *arg) {
+    ARG_UNUSED(arg);
+
+#if DT_HAS_COMPAT_STATUS_OKAY(METEORITE_ENCODER_COMPAT)
+    for (size_t i = 0; i < ARRAY_SIZE(meteorite_encoder_slots); i++) {
+        if (!encode_encoder_slot(stream, field, meteorite_encoder_slots[i], i)) {
+            return false;
+        }
+    }
+#endif
+
+    return true;
 }
 
 static int32_t count_to_max(uint8_t count) { return count > 0 ? count - 1 : 0; }
@@ -380,6 +445,7 @@ static zmk_meteorite_ConfigState config_state_msg(void) {
     state.firmware_feature_version.funcs.encode = encode_string;
     state.firmware_feature_version.arg = (void *)METEORITE_CONFIG_FEATURE_VERSION;
     state.fields.funcs.encode = encode_config_fields;
+    state.encoder_slots.funcs.encode = encode_encoder_slots;
 
     return state;
 }
