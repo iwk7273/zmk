@@ -124,12 +124,14 @@ if (CONFIG_ZMK_STUDIO_RPC)
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/core.proto
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/behaviors.proto
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/keymap.proto
+                        ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/meteorite.proto
   )
 
   target_include_directories(app PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
   target_sources(app PRIVATE ${proto_srcs} ${proto_hdrs})
 
   add_subdirectory(src/studio)
+  target_sources_ifdef(CONFIG_ZMK_CUSTOM_CONFIG app PRIVATE src/studio/meteorite_config_subsystem.c)
 endif()
 
 zephyr_cc_option(-Wfatal-errors)

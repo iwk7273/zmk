@@ -6,6 +6,7 @@
 
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #include <pb_encode.h>
@@ -15,6 +16,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 ZMK_RPC_SUBSYSTEM(core)
 
 #define CORE_RESPONSE(type, ...) ZMK_RPC_RESPONSE(core, type, __VA_ARGS__)
+#define METEORITE_CONFIG_CAPABILITY "meteorite.config"
 
 static bool encode_device_info_name(pb_ostream_t *stream, const pb_field_t *field,
                                     void *const *arg) {
@@ -44,6 +46,30 @@ static bool encode_device_info_serial_number(pb_ostream_t *stream, const pb_fiel
 
 #endif // IS_ENABLED(CONFIG_HWINFO)
 
+static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field_t *field,
+                                            void *const *arg) {
+    ARG_UNUSED(arg);
+
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    const char *capabilities[] = {METEORITE_CONFIG_CAPABILITY};
+
+    for (size_t i = 0; i < ARRAY_SIZE(capabilities); i++) {
+        if (!pb_encode_tag_for_field(stream, field)) {
+            return false;
+        }
+
+        if (!pb_encode_string(stream, capabilities[i], strlen(capabilities[i]))) {
+            return false;
+        }
+    }
+#else
+    ARG_UNUSED(stream);
+    ARG_UNUSED(field);
+#endif // IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+
+    return true;
+}
+
 zmk_studio_Response get_device_info(const zmk_studio_Request *req) {
     LOG_DBG("");
     zmk_core_GetDeviceInfoResponse resp = zmk_core_GetDeviceInfoResponse_init_zero;
@@ -52,6 +78,7 @@ zmk_studio_Response get_device_info(const zmk_studio_Request *req) {
 #if IS_ENABLED(CONFIG_HWINFO)
     resp.serial_number.funcs.encode = encode_device_info_serial_number;
 #endif // IS_ENABLED(CONFIG_HWINFO)
+    resp.capabilities.funcs.encode = encode_device_info_capabilities;
 
     return CORE_RESPONSE(get_device_info, resp);
 }
