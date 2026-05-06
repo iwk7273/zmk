@@ -369,8 +369,11 @@ static zmk_meteorite_ConfigState config_state_msg(void) {
     zmk_meteorite_ConfigState state = zmk_meteorite_ConfigState_init_zero;
 
     state.schema_version = METEORITE_CONFIG_SCHEMA_VERSION;
+    state.has_current = true;
     state.current = config_values_from(zmk_custom_config_get());
+    state.has_saved = true;
     state.saved = config_values_from(zmk_custom_config_saved_get());
+    state.has_defaults = true;
     state.defaults = config_values_from(zmk_custom_config_defaults_get());
     state.dirty = zmk_custom_config_check_unsaved_changes();
 
