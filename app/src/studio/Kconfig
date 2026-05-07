@@ -90,10 +90,12 @@ config ZMK_STUDIO_RPC_THREAD_STACK_SIZE
 
 config ZMK_STUDIO_RPC_RX_BUF_SIZE
     int "RX Buffer Size"
+    default 128 if ZMK_COMBO_SETTINGS
     default 30
 
 config ZMK_STUDIO_RPC_TX_BUF_SIZE
     int "TX Buffer Size"
+    default 128 if ZMK_COMBO_SETTINGS
     default 64
 
 endif
