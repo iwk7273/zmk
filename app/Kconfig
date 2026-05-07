@@ -461,6 +461,35 @@ config ZMK_COMBO_MAX_KEYS_PER_COMBO
     help
        Deprecated: This is now auto-calculated based on `key-positions` in devicetree
 
+config ZMK_COMBO_SETTINGS
+    bool "Runtime combo settings storage"
+    depends on SETTINGS
+    depends on ZMK_BEHAVIOR_LOCAL_IDS
+
+if ZMK_COMBO_SETTINGS
+
+config ZMK_COMBO_SETTINGS_MAX_COMBOS
+    int "Maximum editable combo slots"
+    default 16
+    range 1 32
+
+config ZMK_COMBO_SETTINGS_MAX_KEYS_PER_COMBO
+    int "Maximum key positions per editable combo"
+    default 4
+    range 2 20
+
+config ZMK_COMBO_SETTINGS_MAX_LAYERS
+    int "Maximum layer filters per editable combo"
+    default 32
+    range 1 32
+
+config ZMK_COMBO_SETTINGS_ID_MAX_LEN
+    int "Maximum combo ID length"
+    default 32
+    range 8 64
+
+endif # ZMK_COMBO_SETTINGS
+
 # Combo options
 endmenu
 
