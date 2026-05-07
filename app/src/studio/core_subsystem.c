@@ -17,6 +17,7 @@ ZMK_RPC_SUBSYSTEM(core)
 
 #define CORE_RESPONSE(type, ...) ZMK_RPC_RESPONSE(core, type, __VA_ARGS__)
 #define METEORITE_CONFIG_CAPABILITY "meteorite.config"
+#define COMBOS_CONFIG_CAPABILITY "combos.config"
 
 static bool encode_device_info_name(pb_ostream_t *stream, const pb_field_t *field,
                                     void *const *arg) {
@@ -51,7 +52,19 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
     ARG_UNUSED(arg);
 
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
-    const char *capabilities[] = {METEORITE_CONFIG_CAPABILITY};
+    const char *capabilities[] = {
+        METEORITE_CONFIG_CAPABILITY,
+#if IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS)
+        COMBOS_CONFIG_CAPABILITY,
+#endif
+    };
+#elif IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS)
+    const char *capabilities[] = {COMBOS_CONFIG_CAPABILITY};
+#else
+    ARG_UNUSED(stream);
+    ARG_UNUSED(field);
+    return true;
+#endif
 
     for (size_t i = 0; i < ARRAY_SIZE(capabilities); i++) {
         if (!pb_encode_tag_for_field(stream, field)) {
@@ -62,10 +75,6 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
             return false;
         }
     }
-#else
-    ARG_UNUSED(stream);
-    ARG_UNUSED(field);
-#endif // IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
 
     return true;
 }
