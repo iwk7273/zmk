@@ -18,6 +18,7 @@ static const struct behavior_driver_api behavior_sensor_rotate_var_driver_api = 
 
 #define SENSOR_ROTATE_VAR_INST(n)                                                                  \
     static struct behavior_sensor_rotate_config behavior_sensor_rotate_var_config_##n = {          \
+        .magic = BEHAVIOR_SENSOR_ROTATE_CONFIG_MAGIC,                                             \
         .cw_binding = {.behavior_dev = DEVICE_DT_NAME(DT_INST_PHANDLE_BY_IDX(n, bindings, 0))},    \
         .ccw_binding = {.behavior_dev = DEVICE_DT_NAME(DT_INST_PHANDLE_BY_IDX(n, bindings, 1))},   \
         .tap_ms = DT_INST_PROP(n, tap_ms),                                                         \

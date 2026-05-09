@@ -26,6 +26,17 @@ ZMK_RPC_SUBSYSTEM(keymap)
 #define KEYMAP_RESPONSE(type, ...) ZMK_RPC_RESPONSE(keymap, type, __VA_ARGS__)
 #define KEYMAP_NOTIFICATION(type, ...) ZMK_RPC_NOTIFICATION(keymap, type, __VA_ARGS__)
 
+static void fill_proto_binding(const struct zmk_behavior_binding *binding,
+                               zmk_keymap_BehaviorBinding *proto) {
+    if (!binding || !binding->behavior_dev) {
+        return;
+    }
+
+    proto->behavior_id = zmk_behavior_get_local_id(binding->behavior_dev);
+    proto->param1 = binding->param1;
+    proto->param2 = binding->param2;
+}
+
 static bool encode_layer_bindings(pb_ostream_t *stream, const pb_field_t *field, void *const *arg) {
     const zmk_keymap_layer_id_t layer_id = *(uint8_t *)*arg;
 
@@ -35,11 +46,7 @@ static bool encode_layer_bindings(pb_ostream_t *stream, const pb_field_t *field,
 
         zmk_keymap_BehaviorBinding bb = zmk_keymap_BehaviorBinding_init_zero;
 
-        if (binding && binding->behavior_dev) {
-            bb.behavior_id = zmk_behavior_get_local_id(binding->behavior_dev);
-            bb.param1 = binding->param1;
-            bb.param2 = binding->param2;
-        }
+        fill_proto_binding(binding, &bb);
 
         if (!pb_encode_tag_for_field(stream, field)) {
             return false;
@@ -63,10 +70,8 @@ static bool encode_layer_sensor_bindings(pb_ostream_t *stream, const pb_field_t 
 
         zmk_keymap_BehaviorBinding bb = zmk_keymap_BehaviorBinding_init_zero;
 
-        if (ret >= 0 && binding.behavior_dev) {
-            bb.behavior_id = zmk_behavior_get_local_id(binding.behavior_dev);
-            bb.param1 = binding.param1;
-            bb.param2 = binding.param2;
+        if (ret >= 0) {
+            fill_proto_binding(&binding, &bb);
         }
 
         if (!pb_encode_tag_for_field(stream, field)) {
@@ -74,6 +79,43 @@ static bool encode_layer_sensor_bindings(pb_ostream_t *stream, const pb_field_t 
         }
 
         if (!pb_encode_submessage(stream, &zmk_keymap_BehaviorBinding_msg, &bb)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool encode_layer_sensor_direction_bindings(pb_ostream_t *stream, const pb_field_t *field,
+                                                   void *const *arg) {
+    const zmk_keymap_layer_id_t layer_id = *(uint8_t *)*arg;
+
+    for (int s = 0; s < ZMK_KEYMAP_SENSORS_LEN; s++) {
+        zmk_keymap_SensorDirectionBindings direction_bindings =
+            zmk_keymap_SensorDirectionBindings_init_zero;
+        struct zmk_behavior_binding binding = {0};
+
+        int ret = zmk_keymap_get_layer_sensor_binding_param_at_idx(
+            layer_id, s, ZMK_KEYMAP_SENSOR_BINDING_PARAM_1, &binding);
+        if (ret >= 0) {
+            direction_bindings.has_param1_binding = true;
+            fill_proto_binding(&binding, &direction_bindings.param1_binding);
+        }
+
+        binding = (struct zmk_behavior_binding){0};
+        ret = zmk_keymap_get_layer_sensor_binding_param_at_idx(
+            layer_id, s, ZMK_KEYMAP_SENSOR_BINDING_PARAM_2, &binding);
+        if (ret >= 0) {
+            direction_bindings.has_param2_binding = true;
+            fill_proto_binding(&binding, &direction_bindings.param2_binding);
+        }
+
+        if (!pb_encode_tag_for_field(stream, field)) {
+            return false;
+        }
+
+        if (!pb_encode_submessage(stream, &zmk_keymap_SensorDirectionBindings_msg,
+                                  &direction_bindings)) {
             return false;
         }
     }
@@ -105,6 +147,8 @@ static void populate_layer(zmk_keymap_Layer *layer, zmk_keymap_layer_id_t *layer
     layer->bindings.arg = layer_id;
     layer->sensor_bindings.funcs.encode = encode_layer_sensor_bindings;
     layer->sensor_bindings.arg = layer_id;
+    layer->sensor_direction_bindings.funcs.encode = encode_layer_sensor_direction_bindings;
+    layer->sensor_direction_bindings.arg = layer_id;
 }
 
 static bool encode_keymap_layers(pb_ostream_t *stream, const pb_field_t *field, void *const *arg) {
@@ -295,6 +339,82 @@ zmk_studio_Response set_layer_sensor_binding(const zmk_studio_Request *req) {
 
     return KEYMAP_RESPONSE(
         set_layer_sensor_binding,
+        zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_OK);
+}
+
+static int sensor_binding_param_from_proto(zmk_keymap_SensorBindingParam proto,
+                                           enum zmk_keymap_sensor_binding_param *param) {
+    switch (proto) {
+    case zmk_keymap_SensorBindingParam_SENSOR_BINDING_PARAM_1:
+        *param = ZMK_KEYMAP_SENSOR_BINDING_PARAM_1;
+        return 0;
+    case zmk_keymap_SensorBindingParam_SENSOR_BINDING_PARAM_2:
+        *param = ZMK_KEYMAP_SENSOR_BINDING_PARAM_2;
+        return 0;
+    default:
+        return -EINVAL;
+    }
+}
+
+zmk_studio_Response set_layer_sensor_binding_param(const zmk_studio_Request *req) {
+    LOG_DBG("");
+    const zmk_keymap_SetLayerSensorBindingParamRequest *set_req =
+        &req->subsystem.keymap.request_type.set_layer_sensor_binding_param;
+
+    enum zmk_keymap_sensor_binding_param param;
+    if (sensor_binding_param_from_proto(set_req->param, &param) < 0) {
+        return KEYMAP_RESPONSE(
+            set_layer_sensor_binding_param,
+            zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_LOCATION);
+    }
+
+    zmk_behavior_local_id_t bid = set_req->binding.behavior_id;
+
+    const char *behavior_name = zmk_behavior_find_behavior_name_from_local_id(bid);
+
+    if (!behavior_name) {
+        return KEYMAP_RESPONSE(
+            set_layer_sensor_binding_param,
+            zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_BEHAVIOR);
+    }
+
+    struct zmk_behavior_binding binding = (struct zmk_behavior_binding){
+        .behavior_dev = behavior_name,
+        .param1 = set_req->binding.param1,
+        .param2 = set_req->binding.param2,
+    };
+
+    int ret = zmk_behavior_validate_binding(&binding);
+    if (ret < 0) {
+        return KEYMAP_RESPONSE(
+            set_layer_sensor_binding_param,
+            zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_PARAMETERS);
+    }
+
+    ret = zmk_keymap_set_layer_sensor_binding_param_at_idx(set_req->layer_id,
+                                                           set_req->sensor_index, param, binding);
+
+    if (ret < 0) {
+        LOG_WRN("Setting the sensor binding param failed with %d", ret);
+        switch (ret) {
+        case -EINVAL:
+            return KEYMAP_RESPONSE(
+                set_layer_sensor_binding_param,
+                zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_LOCATION);
+        case -ENOTSUP:
+            return KEYMAP_RESPONSE(
+                set_layer_sensor_binding_param,
+                zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_BEHAVIOR);
+        default:
+            return ZMK_RPC_SIMPLE_ERR(GENERIC);
+        }
+    }
+
+    raise_zmk_studio_rpc_notification((struct zmk_studio_rpc_notification){
+        .notification = KEYMAP_NOTIFICATION(unsaved_changes_status_changed, true)});
+
+    return KEYMAP_RESPONSE(
+        set_layer_sensor_binding_param,
         zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_OK);
 }
 
@@ -592,6 +712,9 @@ zmk_studio_Response restore_layer(const zmk_studio_Request *req) {
         resp.result.ok.bindings.arg = (void *)&restore_req->layer_id;
         resp.result.ok.sensor_bindings.funcs.encode = encode_layer_sensor_bindings;
         resp.result.ok.sensor_bindings.arg = (void *)&restore_req->layer_id;
+        resp.result.ok.sensor_direction_bindings.funcs.encode =
+            encode_layer_sensor_direction_bindings;
+        resp.result.ok.sensor_direction_bindings.arg = (void *)&restore_req->layer_id;
 
         raise_zmk_studio_rpc_notification((struct zmk_studio_rpc_notification){
             .notification = KEYMAP_NOTIFICATION(unsaved_changes_status_changed, true)});
@@ -647,6 +770,7 @@ zmk_studio_Response set_layer_props(const zmk_studio_Request *req) {
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, get_keymap, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, set_layer_binding, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, set_layer_sensor_binding, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(keymap, set_layer_sensor_binding_param, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, check_unsaved_changes, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, save_changes, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, discard_changes, ZMK_STUDIO_RPC_HANDLER_SECURED);

@@ -1,0 +1,16 @@
+/*
+ * Copyright (c) 2026 The ZMK Contributors
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/ {
+    behaviors {
+        sensor_rotate_bindings: sensor_rotate_bindings {
+            compatible = "zmk,behavior-sensor-rotate-bindings";
+            #sensor-binding-cells = <0>;
+            tap-ms = <25>;
+            display-name = "Sensor Direction Bindings";
+        };
+    };
+};

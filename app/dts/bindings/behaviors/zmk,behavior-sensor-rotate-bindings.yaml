@@ -1,0 +1,21 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: Sensor rotate behavior with keymap-editable direction bindings
+
+compatible: "zmk,behavior-sensor-rotate-bindings"
+
+include: behavior-metadata.yaml
+
+properties:
+  label:
+    type: string
+    required: false
+    deprecated: true
+  "#sensor-binding-cells":
+    type: int
+    required: true
+    const: 0
+  tap-ms:
+    type: int
+    default: 5
