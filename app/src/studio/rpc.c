@@ -39,19 +39,21 @@ static void log_missing_handler(const struct zmk_rpc_subsystem *subsys, uint8_t 
             (unsigned int)subsys->subsystem_choice, (unsigned int)which_req,
             (unsigned int)subsys->handlers_start_index, (unsigned int)subsys->handlers_end_index);
 
-    if (subsys->handlers_start_index > subsys->handlers_end_index) {
-        LOG_ERR("Subsystem %u has no registered handler range",
-                (unsigned int)subsys->subsystem_choice);
-        return;
-    }
-
-    for (int i = subsys->handlers_start_index; i <= subsys->handlers_end_index; i++) {
-        struct zmk_rpc_subsystem_handler *sub_handler;
-        STRUCT_SECTION_GET(zmk_rpc_subsystem_handler, i, &sub_handler);
-        LOG_ERR("Available handler[%d]: subsystem %u request %u security %u", i,
+    bool found = false;
+    STRUCT_SECTION_FOREACH(zmk_rpc_subsystem_handler, sub_handler) {
+        if (sub_handler->subsystem_choice != subsys->subsystem_choice) {
+            continue;
+        }
+        found = true;
+        LOG_ERR("Available handler: subsystem %u request %u security %u",
                 (unsigned int)sub_handler->subsystem_choice,
                 (unsigned int)sub_handler->request_choice,
                 (unsigned int)sub_handler->security);
+    }
+
+    if (!found) {
+        LOG_ERR("Subsystem %u has no registered handlers",
+                (unsigned int)subsys->subsystem_choice);
     }
 }
 
@@ -60,9 +62,10 @@ zmk_studio_Response zmk_rpc_subsystem_delegate_to_subs(const struct zmk_rpc_subs
                                                        uint8_t which_req) {
     LOG_DBG("Got subsystem func for %d", subsys->subsystem_choice);
 
-    for (int i = subsys->handlers_start_index; i <= subsys->handlers_end_index; i++) {
-        struct zmk_rpc_subsystem_handler *sub_handler;
-        STRUCT_SECTION_GET(zmk_rpc_subsystem_handler, i, &sub_handler);
+    STRUCT_SECTION_FOREACH(zmk_rpc_subsystem_handler, sub_handler) {
+        if (sub_handler->subsystem_choice != subsys->subsystem_choice) {
+            continue;
+        }
         if (sub_handler->request_choice == which_req) {
             if (sub_handler->security == ZMK_STUDIO_RPC_HANDLER_SECURED &&
                 zmk_studio_core_get_lock_state() != ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED) {
