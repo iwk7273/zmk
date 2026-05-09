@@ -8,6 +8,8 @@
 
 LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 
+#include <errno.h>
+
 #include <drivers/behavior.h>
 
 #include <zmk/behavior.h>
@@ -205,6 +207,35 @@ zmk_studio_Response set_layer_binding(const zmk_studio_Request *req) {
                            zmk_keymap_SetLayerBindingResponse_SET_LAYER_BINDING_RESP_OK);
 }
 
+static int validate_sensor_binding(const struct zmk_behavior_binding *binding) {
+    const struct device *behavior = zmk_behavior_get_binding(binding->behavior_dev);
+
+    if (!behavior) {
+        return -ENODEV;
+    }
+
+    const struct behavior_driver_api *api = (const struct behavior_driver_api *)behavior->api;
+
+    if (!api || !api->sensor_binding_accept_data || !api->sensor_binding_process) {
+        return -ENOTSUP;
+    }
+
+#if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+    struct behavior_parameter_metadata metadata;
+    int ret = behavior_get_parameter_metadata(behavior, &metadata);
+
+    if (ret == -ENODEV) {
+        return 0;
+    } else if (ret < 0) {
+        return ret;
+    }
+
+    return zmk_behavior_check_params_match_metadata(&metadata, binding->param1, binding->param2);
+#else
+    return 0;
+#endif // IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+}
+
 zmk_studio_Response set_layer_sensor_binding(const zmk_studio_Request *req) {
     LOG_DBG("");
     const zmk_keymap_SetLayerSensorBindingRequest *set_req =
@@ -226,8 +257,12 @@ zmk_studio_Response set_layer_sensor_binding(const zmk_studio_Request *req) {
         .param2 = set_req->binding.param2,
     };
 
-    int ret = zmk_behavior_validate_binding(&binding);
-    if (ret < 0) {
+    int ret = validate_sensor_binding(&binding);
+    if (ret == -ENODEV || ret == -ENOTSUP) {
+        zmk_keymap_SetLayerSensorBindingResponse resp =
+            zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_BEHAVIOR;
+        return KEYMAP_RESPONSE(set_layer_sensor_binding, resp);
+    } else if (ret < 0) {
         zmk_keymap_SetLayerSensorBindingResponse resp =
             zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_PARAMETERS;
         return KEYMAP_RESPONSE(set_layer_sensor_binding, resp);
