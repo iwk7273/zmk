@@ -57,7 +57,11 @@ const char *zmk_keymap_layer_name(zmk_keymap_layer_id_t layer);
 const struct zmk_behavior_binding *zmk_keymap_get_layer_binding_at_idx(zmk_keymap_layer_id_t layer,
                                                                        uint16_t binding_idx);
 int zmk_keymap_set_layer_binding_at_idx(zmk_keymap_layer_id_t layer, uint16_t binding_idx,
-                                        const struct zmk_behavior_binding binding);
+                                         const struct zmk_behavior_binding binding);
+int zmk_keymap_get_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer, uint16_t sensor_idx,
+                                               struct zmk_behavior_binding *binding);
+int zmk_keymap_set_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer, uint16_t sensor_idx,
+                                               const struct zmk_behavior_binding binding);
 
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_LAYER_REORDERING)
 
