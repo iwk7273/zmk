@@ -5,6 +5,8 @@ description: Sensor rotate behavior
 
 compatible: "zmk,behavior-sensor-rotate-var"
 
+include: behavior-metadata.yaml
+
 properties:
   label:
     type: string
