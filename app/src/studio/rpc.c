@@ -34,6 +34,27 @@ static struct zmk_rpc_subsystem *find_subsystem_for_choice(uint8_t choice) {
     return NULL;
 }
 
+static void log_missing_handler(const struct zmk_rpc_subsystem *subsys, uint8_t which_req) {
+    LOG_ERR("No handler func found for subsystem %u request %u; handler index range %u..%u",
+            (unsigned int)subsys->subsystem_choice, (unsigned int)which_req,
+            (unsigned int)subsys->handlers_start_index, (unsigned int)subsys->handlers_end_index);
+
+    if (subsys->handlers_start_index > subsys->handlers_end_index) {
+        LOG_ERR("Subsystem %u has no registered handler range",
+                (unsigned int)subsys->subsystem_choice);
+        return;
+    }
+
+    for (int i = subsys->handlers_start_index; i <= subsys->handlers_end_index; i++) {
+        struct zmk_rpc_subsystem_handler *sub_handler;
+        STRUCT_SECTION_GET(zmk_rpc_subsystem_handler, i, &sub_handler);
+        LOG_ERR("Available handler[%d]: subsystem %u request %u security %u", i,
+                (unsigned int)sub_handler->subsystem_choice,
+                (unsigned int)sub_handler->request_choice,
+                (unsigned int)sub_handler->security);
+    }
+}
+
 zmk_studio_Response zmk_rpc_subsystem_delegate_to_subs(const struct zmk_rpc_subsystem *subsys,
                                                        const zmk_studio_Request *req,
                                                        uint8_t which_req) {
@@ -51,7 +72,7 @@ zmk_studio_Response zmk_rpc_subsystem_delegate_to_subs(const struct zmk_rpc_subs
             return sub_handler->func(req);
         }
     }
-    LOG_ERR("No handler func found for %d", which_req);
+    log_missing_handler(subsys, which_req);
     return ZMK_RPC_RESPONSE(meta, simple_error, zmk_meta_ErrorConditions_RPC_NOT_FOUND);
 }
 

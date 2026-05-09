@@ -361,8 +361,15 @@ zmk_studio_Response set_layer_sensor_binding_param(const zmk_studio_Request *req
     const zmk_keymap_SetLayerSensorBindingParamRequest *set_req =
         &req->subsystem.keymap.request_type.set_layer_sensor_binding_param;
 
+    LOG_INF("set_layer_sensor_binding_param reached: layer=%u sensor=%u param=%d behavior_id=%u "
+            "p1=%d p2=%d",
+            (unsigned int)set_req->layer_id, (unsigned int)set_req->sensor_index,
+            (int)set_req->param, (unsigned int)set_req->binding.behavior_id,
+            (int)set_req->binding.param1, (int)set_req->binding.param2);
+
     enum zmk_keymap_sensor_binding_param param;
     if (sensor_binding_param_from_proto(set_req->param, &param) < 0) {
+        LOG_ERR("set_layer_sensor_binding_param invalid param: %d", (int)set_req->param);
         return KEYMAP_RESPONSE(
             set_layer_sensor_binding_param,
             zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_LOCATION);
