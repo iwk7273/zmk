@@ -10,6 +10,7 @@
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #include <pb_encode.h>
+#include <zmk/sensors.h>
 #include <zmk/studio/core.h>
 #include <zmk/studio/rpc.h>
 
@@ -18,6 +19,7 @@ ZMK_RPC_SUBSYSTEM(core)
 #define CORE_RESPONSE(type, ...) ZMK_RPC_RESPONSE(core, type, __VA_ARGS__)
 #define METEORITE_CONFIG_CAPABILITY "meteorite.config"
 #define COMBOS_CONFIG_CAPABILITY "combos.config"
+#define KEYMAP_SENSOR_BINDINGS_CAPABILITY "keymap.sensor_bindings"
 
 static bool encode_device_info_name(pb_ostream_t *stream, const pb_field_t *field,
                                     void *const *arg) {
@@ -51,15 +53,19 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
                                             void *const *arg) {
     ARG_UNUSED(arg);
 
-#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG) || IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS) ||              \
+    (IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS)
     const char *capabilities[] = {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
         METEORITE_CONFIG_CAPABILITY,
+#endif
 #if IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS)
         COMBOS_CONFIG_CAPABILITY,
 #endif
+#if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS
+        KEYMAP_SENSOR_BINDINGS_CAPABILITY,
+#endif
     };
-#elif IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS)
-    const char *capabilities[] = {COMBOS_CONFIG_CAPABILITY};
 #else
     ARG_UNUSED(stream);
     ARG_UNUSED(field);
