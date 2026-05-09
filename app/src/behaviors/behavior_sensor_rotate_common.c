@@ -102,3 +102,38 @@ int zmk_behavior_sensor_rotate_common_process(struct zmk_behavior_binding *bindi
 
     return ZMK_BEHAVIOR_OPAQUE;
 }
+
+int zmk_behavior_sensor_rotate_get_binding_param(
+    const struct zmk_behavior_binding *sensor_binding, enum zmk_keymap_sensor_binding_param param,
+    struct zmk_behavior_binding *binding) {
+    if (!sensor_binding || !binding) {
+        return -EINVAL;
+    }
+
+    const struct device *dev = zmk_behavior_get_binding(sensor_binding->behavior_dev);
+    if (!dev || !dev->config) {
+        return -ENOTSUP;
+    }
+
+    const struct behavior_sensor_rotate_config *cfg = dev->config;
+    if (cfg->magic != BEHAVIOR_SENSOR_ROTATE_CONFIG_MAGIC) {
+        return -ENOTSUP;
+    }
+
+    switch (param) {
+    case ZMK_KEYMAP_SENSOR_BINDING_PARAM_1:
+        *binding = cfg->cw_binding;
+        if (cfg->override_params) {
+            binding->param1 = sensor_binding->param1;
+        }
+        return 0;
+    case ZMK_KEYMAP_SENSOR_BINDING_PARAM_2:
+        *binding = cfg->ccw_binding;
+        if (cfg->override_params) {
+            binding->param1 = sensor_binding->param2;
+        }
+        return 0;
+    default:
+        return -EINVAL;
+    }
+}

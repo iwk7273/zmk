@@ -40,6 +40,11 @@ typedef uint8_t zmk_keymap_layer_index_t;
 
 typedef uint32_t zmk_keymap_layers_state_t;
 
+enum zmk_keymap_sensor_binding_param {
+    ZMK_KEYMAP_SENSOR_BINDING_PARAM_1 = 0,
+    ZMK_KEYMAP_SENSOR_BINDING_PARAM_2 = 1,
+};
+
 zmk_keymap_layer_id_t zmk_keymap_layer_index_to_id(zmk_keymap_layer_index_t layer_index);
 
 zmk_keymap_layer_id_t zmk_keymap_layer_default(void);
@@ -62,6 +67,12 @@ int zmk_keymap_get_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer, uint
                                                struct zmk_behavior_binding *binding);
 int zmk_keymap_set_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer, uint16_t sensor_idx,
                                                const struct zmk_behavior_binding binding);
+int zmk_keymap_get_layer_sensor_binding_param_at_idx(
+    zmk_keymap_layer_id_t layer, uint16_t sensor_idx, enum zmk_keymap_sensor_binding_param param,
+    struct zmk_behavior_binding *binding);
+int zmk_keymap_set_layer_sensor_binding_param_at_idx(
+    zmk_keymap_layer_id_t layer, uint16_t sensor_idx, enum zmk_keymap_sensor_binding_param param,
+    const struct zmk_behavior_binding binding);
 
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_LAYER_REORDERING)
 

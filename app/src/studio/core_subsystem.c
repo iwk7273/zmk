@@ -20,6 +20,7 @@ ZMK_RPC_SUBSYSTEM(core)
 #define METEORITE_CONFIG_CAPABILITY "meteorite.config"
 #define COMBOS_CONFIG_CAPABILITY "combos.config"
 #define KEYMAP_SENSOR_BINDINGS_CAPABILITY "keymap.sensor_bindings"
+#define KEYMAP_SENSOR_DIRECTION_BINDINGS_CAPABILITY "keymap.sensor_direction_bindings"
 
 static bool encode_device_info_name(pb_ostream_t *stream, const pb_field_t *field,
                                     void *const *arg) {
@@ -64,6 +65,9 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
 #endif
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS
         KEYMAP_SENSOR_BINDINGS_CAPABILITY,
+#if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_SENSOR_ROTATE_BINDINGS)
+        KEYMAP_SENSOR_DIRECTION_BINDINGS_CAPABILITY,
+#endif
 #endif
     };
 #else
