@@ -238,7 +238,7 @@ static bool encode_field_options(pb_ostream_t *stream, const pb_field_t *field, 
                encode_option(stream, field, 1, "On", 1, "On");
     case METEORITE_OPTIONS_CPI:
         for (uint8_t i = 0; i < zmk_custom_config_cpi_count(); i++) {
-            uint16_t cpi = (i + 1) * 200;
+            uint16_t cpi = zmk_custom_config_axis_idx_to_value(zmk_custom_config_cpi_axis(), i);
             char label[16];
             snprintf(label, sizeof(label), "%u CPI", cpi);
             if (!encode_option(stream, field, i, label, cpi, label)) {
@@ -248,7 +248,8 @@ static bool encode_field_options(pb_ostream_t *stream, const pb_field_t *field, 
         return true;
     case METEORITE_OPTIONS_SCROLL_DIV:
         for (uint8_t i = 0; i < zmk_custom_config_scroll_div_count(); i++) {
-            uint16_t div = (i + 1) * 5;
+            uint16_t div =
+                zmk_custom_config_axis_idx_to_value(zmk_custom_config_scroll_div_axis(), i);
             char label[16];
             snprintf(label, sizeof(label), "%u", div);
             if (!encode_option(stream, field, i, label, div, label)) {
