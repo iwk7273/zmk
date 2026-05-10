@@ -37,6 +37,8 @@ static void fill_proto_binding(const struct zmk_behavior_binding *binding,
     proto->param2 = binding->param2;
 }
 
+static int validate_keymap_binding(const struct zmk_behavior_binding *binding);
+
 static bool encode_layer_bindings(pb_ostream_t *stream, const pb_field_t *field, void *const *arg) {
     const zmk_keymap_layer_id_t layer_id = *(uint8_t *)*arg;
 
@@ -223,7 +225,7 @@ zmk_studio_Response set_layer_binding(const zmk_studio_Request *req) {
         .param2 = set_req->binding.param2,
     };
 
-    int ret = zmk_behavior_validate_binding(&binding);
+    int ret = validate_keymap_binding(&binding);
     if (ret < 0) {
         return KEYMAP_RESPONSE(
             set_layer_binding,
@@ -251,6 +253,36 @@ zmk_studio_Response set_layer_binding(const zmk_studio_Request *req) {
                            zmk_keymap_SetLayerBindingResponse_SET_LAYER_BINDING_RESP_OK);
 }
 
+static int validate_behavior_binding_params(const struct device *behavior,
+                                            const struct zmk_behavior_binding *binding) {
+#if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+    struct behavior_parameter_metadata metadata;
+    int ret = behavior_get_parameter_metadata(behavior, &metadata);
+
+    if (ret == -ENODEV) {
+        return 0;
+    } else if (ret < 0) {
+        return ret;
+    }
+
+    return zmk_behavior_check_params_match_metadata(&metadata, binding->param1, binding->param2);
+#else
+    (void)behavior;
+    (void)binding;
+    return 0;
+#endif // IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+}
+
+static int validate_keymap_binding(const struct zmk_behavior_binding *binding) {
+    const struct device *behavior = zmk_behavior_get_binding(binding->behavior_dev);
+
+    if (!behavior) {
+        return -ENODEV;
+    }
+
+    return validate_behavior_binding_params(behavior, binding);
+}
+
 static int validate_sensor_binding(const struct zmk_behavior_binding *binding) {
     const struct device *behavior = zmk_behavior_get_binding(binding->behavior_dev);
 
@@ -264,20 +296,7 @@ static int validate_sensor_binding(const struct zmk_behavior_binding *binding) {
         return -ENOTSUP;
     }
 
-#if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
-    struct behavior_parameter_metadata metadata;
-    int ret = behavior_get_parameter_metadata(behavior, &metadata);
-
-    if (ret == -ENODEV) {
-        return 0;
-    } else if (ret < 0) {
-        return ret;
-    }
-
-    return zmk_behavior_check_params_match_metadata(&metadata, binding->param1, binding->param2);
-#else
-    return 0;
-#endif // IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+    return validate_behavior_binding_params(behavior, binding);
 }
 
 zmk_studio_Response set_layer_sensor_binding(const zmk_studio_Request *req) {
@@ -384,7 +403,7 @@ zmk_studio_Response set_layer_sensor_binding_param(const zmk_studio_Request *req
         .param2 = set_req->binding.param2,
     };
 
-    int ret = zmk_behavior_validate_binding(&binding);
+    int ret = validate_keymap_binding(&binding);
     if (ret < 0) {
         return KEYMAP_RESPONSE(
             set_layer_sensor_binding_param,
