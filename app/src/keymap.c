@@ -1594,6 +1594,27 @@ static int keymap_handle_commit(void) {
                             binding->local_id);
                 }
             }
+#if ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
+            if (!zmk_sensor_direction_keymap_overrides[l][s]) {
+                continue;
+            }
+
+            for (int p = 0; p < ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT; p++) {
+                struct zmk_behavior_binding *direction_binding =
+                    &zmk_sensor_direction_keymap[l][s][p];
+
+                if (direction_binding->local_id > 0 && !direction_binding->behavior_dev) {
+                    direction_binding->behavior_dev =
+                        zmk_behavior_find_behavior_name_from_local_id(direction_binding->local_id);
+
+                    if (!direction_binding->behavior_dev) {
+                        LOG_ERR("Failed to finding sensor direction device for local ID %d after "
+                                "settings load",
+                                direction_binding->local_id);
+                    }
+                }
+            }
+#endif
         }
     }
     k_mutex_unlock(&zmk_sensor_keymap_mutex);
