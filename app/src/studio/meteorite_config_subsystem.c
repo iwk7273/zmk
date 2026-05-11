@@ -367,7 +367,7 @@ static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
            bool_value_is_valid(values->os_mode);
 }
 
-static zmk_meteorite_ConfigState config_state_msg(void) {
+static zmk_meteorite_ConfigState config_state_msg(bool include_fields) {
     zmk_meteorite_ConfigState state = zmk_meteorite_ConfigState_init_zero;
 
     state.schema_version = METEORITE_CONFIG_SCHEMA_VERSION;
@@ -381,7 +381,10 @@ static zmk_meteorite_ConfigState config_state_msg(void) {
 
     state.firmware_feature_version.funcs.encode = encode_string;
     state.firmware_feature_version.arg = (void *)METEORITE_CONFIG_FEATURE_VERSION;
-    state.fields.funcs.encode = encode_config_fields;
+
+    if (include_fields) {
+        state.fields.funcs.encode = encode_config_fields;
+    }
 
     return state;
 }
@@ -389,7 +392,7 @@ static zmk_meteorite_ConfigState config_state_msg(void) {
 static zmk_studio_Response get_config_state(const zmk_studio_Request *req) {
     ARG_UNUSED(req);
     LOG_DBG("");
-    return METEORITE_RESPONSE(get_config_state, config_state_msg());
+    return METEORITE_RESPONSE(get_config_state, config_state_msg(true));
 }
 
 static zmk_studio_Response set_config(const zmk_studio_Request *req) {
@@ -473,7 +476,7 @@ void zmk_custom_config_changed(const struct zmk_custom_config *cfg) {
     ARG_UNUSED(cfg);
 
     raise_zmk_studio_rpc_notification((struct zmk_studio_rpc_notification){
-        .notification = METEORITE_NOTIFICATION(config_state_changed, config_state_msg())});
+        .notification = METEORITE_NOTIFICATION(config_state_changed, config_state_msg(false))});
 
     raise_zmk_studio_rpc_notification((struct zmk_studio_rpc_notification){
         .notification = METEORITE_NOTIFICATION(unsaved_changes_status_changed,
