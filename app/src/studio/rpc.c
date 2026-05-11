@@ -6,6 +6,9 @@
 
 #include "msg_framing.h"
 
+#include <errno.h>
+#include <string.h>
+
 #include <pb_encode.h>
 #include <pb_decode.h>
 
@@ -119,9 +122,17 @@ RING_BUF_DECLARE(rpc_tx_buf, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 
 struct ring_buf *zmk_rpc_get_tx_buf(void) { return &rpc_tx_buf; }
 
+#define RPC_TX_BUFFER_WAIT_TIMEOUT_MS 20
+
+struct rpc_tx_stream_state {
+    void *user_data;
+    bool timed_out;
+};
+
 static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t count) {
-    void *user_data = stream->state;
+    struct rpc_tx_stream_state *tx_state = stream->state;
     size_t written = 0;
+    int64_t timeout_at = k_uptime_get() + RPC_TX_BUFFER_WAIT_TIMEOUT_MS;
 
     bool escape_byte_already_written = false;
     do {
@@ -131,8 +142,15 @@ static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t
         uint32_t claim_len = ring_buf_put_claim(&rpc_tx_buf, &write_buf, count - written);
 
         if (claim_len == 0) {
+            selected_transport->tx_notify(&rpc_tx_buf, 0, false, tx_state->user_data);
+            if (k_uptime_get() >= timeout_at) {
+                tx_state->timed_out = true;
+                return false;
+            }
+            k_sleep(K_MSEC(1));
             continue;
         }
+        timeout_at = k_uptime_get() + RPC_TX_BUFFER_WAIT_TIMEOUT_MS;
 
         int escapes_written = 0;
         for (int i = 0; i < claim_len && write_idx < claim_len; i++) {
@@ -165,18 +183,23 @@ static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t
 
         written += (write_idx - escapes_written);
 
-        selected_transport->tx_notify(&rpc_tx_buf, write_idx, false, user_data);
+        selected_transport->tx_notify(&rpc_tx_buf, write_idx, false, tx_state->user_data);
     } while (written < count);
 
     return true;
 }
 
-static pb_ostream_t pb_ostream_for_tx_buf(void *user_data) {
-    pb_ostream_t stream = {&rpc_tx_buffer_write, (void *)user_data, SIZE_MAX, 0};
+static pb_ostream_t pb_ostream_for_tx_buf(struct rpc_tx_stream_state *tx_state) {
+    pb_ostream_t stream = {&rpc_tx_buffer_write, (void *)tx_state, SIZE_MAX, 0};
     return stream;
 }
 
+static K_MUTEX_DEFINE(notification_response_mutex);
+static zmk_studio_Response notification_response;
+
 static int send_response(const zmk_studio_Response *resp) {
+    int ret = 0;
+
     k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
 
     if (!selected_transport) {
@@ -185,10 +208,14 @@ static int send_response(const zmk_studio_Response *resp) {
 
     void *user_data = selected_transport->tx_user_data ? selected_transport->tx_user_data() : NULL;
 
-    pb_ostream_t stream = pb_ostream_for_tx_buf(user_data);
+    struct rpc_tx_stream_state tx_state = {.user_data = user_data};
+    pb_ostream_t stream = pb_ostream_for_tx_buf(&tx_state);
 
     uint8_t framing_byte = FRAMING_SOF;
-    ring_buf_put(&rpc_tx_buf, &framing_byte, 1);
+    if (ring_buf_put(&rpc_tx_buf, &framing_byte, 1) != 1) {
+        ret = -ENOSPC;
+        goto reset_exit;
+    }
 
     selected_transport->tx_notify(&rpc_tx_buf, 1, false, user_data);
 
@@ -196,20 +223,45 @@ static int send_response(const zmk_studio_Response *resp) {
     bool status = pb_encode(&stream, &zmk_studio_Response_msg, resp);
 
     if (!status) {
+        if (tx_state.timed_out) {
+            ret = -ENOSPC;
+            goto reset_exit;
+        }
 #if !IS_ENABLED(CONFIG_NANOPB_NO_ERRMSG)
         LOG_ERR("Failed to encode the message %s", stream.errmsg);
 #endif // !IS_ENABLED(CONFIG_NANOPB_NO_ERRMSG)
-        return -EINVAL;
+        ret = -EINVAL;
+        goto reset_exit;
     }
 
     framing_byte = FRAMING_EOF;
-    ring_buf_put(&rpc_tx_buf, &framing_byte, 1);
+    if (ring_buf_put(&rpc_tx_buf, &framing_byte, 1) != 1) {
+        ret = -ENOSPC;
+        goto reset_exit;
+    }
 
     selected_transport->tx_notify(&rpc_tx_buf, 1, true, user_data);
+    goto exit;
+
+reset_exit:
+    ring_buf_reset(&rpc_tx_buf);
 
 exit:
     k_mutex_unlock(&rpc_transport_mutex);
-    return 0;
+    return ret;
+}
+
+int zmk_rpc_send_notification(const zmk_studio_Notification *notification) {
+    k_mutex_lock(&notification_response_mutex, K_FOREVER);
+
+    memset(&notification_response, 0, sizeof(notification_response));
+    notification_response.which_type = zmk_studio_Response_notification_tag;
+    notification_response.type.notification = *notification;
+
+    int ret = send_response(&notification_response);
+    k_mutex_unlock(&notification_response_mutex);
+
+    return ret;
 }
 
 static void rpc_main(void) {
@@ -322,10 +374,7 @@ static int studio_rpc_listener_cb(const zmk_event_t *eh) {
 
     struct zmk_studio_rpc_notification *rpc_notify = as_zmk_studio_rpc_notification(eh);
     if (rpc_notify) {
-        zmk_studio_Response resp = zmk_studio_Response_init_zero;
-        resp.which_type = zmk_studio_Response_notification_tag;
-        resp.type.notification = rpc_notify->notification;
-        send_response(&resp);
+        zmk_rpc_send_notification(&rpc_notify->notification);
         return ZMK_EV_EVENT_BUBBLE;
     }
 
@@ -333,8 +382,7 @@ static int studio_rpc_listener_cb(const zmk_event_t *eh) {
     STRUCT_SECTION_FOREACH(zmk_rpc_event_mapper, mapper) {
         int ret = mapper->func(eh, &n);
         if (ret >= 0) {
-            raise_zmk_studio_rpc_notification(
-                (struct zmk_studio_rpc_notification){.notification = n});
+            zmk_rpc_send_notification(&n);
             break;
         }
     }
