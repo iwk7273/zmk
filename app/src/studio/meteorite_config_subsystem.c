@@ -12,6 +12,7 @@
 
 #include <zephyr/logging/log.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
@@ -367,12 +368,13 @@ static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
            bool_value_is_valid(values->os_mode);
 }
 
-static zmk_meteorite_ConfigState config_state_msg(void) {
+static zmk_meteorite_ConfigState config_state_msg(bool include_fields) {
     zmk_meteorite_ConfigState state = zmk_meteorite_ConfigState_init_zero;
+    const struct zmk_custom_config *current = zmk_custom_config_get();
 
     state.schema_version = METEORITE_CONFIG_SCHEMA_VERSION;
     state.has_current = true;
-    state.current = config_values_from(zmk_custom_config_get());
+    state.current = config_values_from(current);
     state.has_saved = true;
     state.saved = config_values_from(zmk_custom_config_saved_get());
     state.has_defaults = true;
@@ -381,7 +383,9 @@ static zmk_meteorite_ConfigState config_state_msg(void) {
 
     state.firmware_feature_version.funcs.encode = encode_string;
     state.firmware_feature_version.arg = (void *)METEORITE_CONFIG_FEATURE_VERSION;
-    state.fields.funcs.encode = encode_config_fields;
+    if (include_fields) {
+        state.fields.funcs.encode = encode_config_fields;
+    }
 
     return state;
 }
@@ -389,7 +393,7 @@ static zmk_meteorite_ConfigState config_state_msg(void) {
 static zmk_studio_Response get_config_state(const zmk_studio_Request *req) {
     ARG_UNUSED(req);
     LOG_DBG("");
-    return METEORITE_RESPONSE(get_config_state, config_state_msg());
+    return METEORITE_RESPONSE(get_config_state, config_state_msg(true));
 }
 
 static zmk_studio_Response set_config(const zmk_studio_Request *req) {
@@ -469,15 +473,44 @@ static int meteorite_settings_reset(void) { return zmk_custom_config_reset_setti
 
 ZMK_RPC_SUBSYSTEM_SETTINGS_RESET(meteorite, meteorite_settings_reset);
 
+static K_MUTEX_DEFINE(meteorite_notification_mutex);
+static zmk_studio_Notification meteorite_notification;
+
+static void send_config_state_changed_notification(void) {
+    k_mutex_lock(&meteorite_notification_mutex, K_FOREVER);
+
+    memset(&meteorite_notification, 0, sizeof(meteorite_notification));
+    meteorite_notification.which_subsystem = zmk_studio_Notification_meteorite_tag;
+    meteorite_notification.subsystem.meteorite.which_notification_type =
+        zmk_meteorite_Notification_config_state_changed_tag;
+    meteorite_notification.subsystem.meteorite.notification_type.config_state_changed =
+        config_state_msg(false);
+
+    zmk_rpc_send_notification(&meteorite_notification);
+    k_mutex_unlock(&meteorite_notification_mutex);
+}
+
+static void send_unsaved_changes_status_changed_notification(bool dirty) {
+    k_mutex_lock(&meteorite_notification_mutex, K_FOREVER);
+
+    memset(&meteorite_notification, 0, sizeof(meteorite_notification));
+    meteorite_notification.which_subsystem = zmk_studio_Notification_meteorite_tag;
+    meteorite_notification.subsystem.meteorite.which_notification_type =
+        zmk_meteorite_Notification_unsaved_changes_status_changed_tag;
+    meteorite_notification.subsystem.meteorite.notification_type.unsaved_changes_status_changed =
+        dirty;
+
+    zmk_rpc_send_notification(&meteorite_notification);
+    k_mutex_unlock(&meteorite_notification_mutex);
+}
+
 void zmk_custom_config_changed(const struct zmk_custom_config *cfg) {
     ARG_UNUSED(cfg);
 
-    raise_zmk_studio_rpc_notification((struct zmk_studio_rpc_notification){
-        .notification = METEORITE_NOTIFICATION(config_state_changed, config_state_msg())});
+    send_config_state_changed_notification();
 
-    raise_zmk_studio_rpc_notification((struct zmk_studio_rpc_notification){
-        .notification = METEORITE_NOTIFICATION(unsaved_changes_status_changed,
-                                               zmk_custom_config_check_unsaved_changes())});
+    bool dirty = zmk_custom_config_check_unsaved_changes();
+    send_unsaved_changes_status_changed_notification(dirty);
 }
 
 ZMK_RPC_SUBSYSTEM_HANDLER(meteorite, get_config_state, ZMK_STUDIO_RPC_HANDLER_SECURED);
