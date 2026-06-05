@@ -43,7 +43,7 @@ upstream ZMK にない ZMK Studio RPC capability を追加し、Meteorite editor
 - `../zmk-studio-ts-client`: schema から生成される TypeScript client。
 - `../zmk-feature-meteorite-config`: Meteorite custom config state と behavior 実装。
 - `../zmk-config-meteorite40`: Meteorite40 shield / keymap / west manifest。
-- `../meteorite-keymap-editor`: ブラウザ editor。firmware の capability と metadata に基づいて UI を出します。
+- `../meteorite-studio`: ブラウザ editor。firmware の capability と metadata に基づいて UI を出します。
 
 複数 repo を変更する場合は、repo ごとに差分・検証・commit を分けてください。
 
