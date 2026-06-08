@@ -155,6 +155,7 @@ static void notif_rpc_tx_cb(struct k_work *work) {
     if (ring_buf_size_get(tx_buf) > 0) {
         int ret = k_sem_take(&indicate_sem, K_NO_WAIT);
         if (ret < 0) {
+            bt_conn_unref(conn);
             return;
         }
 
@@ -173,8 +174,9 @@ static void notif_rpc_tx_cb(struct k_work *work) {
 
         int err = bt_gatt_indicate(conn, &rpc_indicate_params);
         if (err < 0) {
-            LOG_WRN("Failed to notify the response %d", err);
+            LOG_ERR("Failed to send indication (%d), retrying", err);
             k_sem_give(&indicate_sem);
+            k_work_submit(&notify_tx_work);
         }
     }
 
@@ -188,6 +190,9 @@ struct gatt_write_state {
 };
 
 static void indicate_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *params, uint8_t err) {
+    if (err) {
+        LOG_WRN("Indication callback error: %d", err);
+    }
     k_sem_give(&indicate_sem);
     k_work_submit(&notify_tx_work);
 }
@@ -199,7 +204,8 @@ static void gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done,
 
     atomic_t ns = atomic_get(&notify_size);
 
-    if (msg_done || state->pending_notify > ns) {
+    if (msg_done || state->pending_notify > ns ||
+        (added == 0 && ring_buf_size_get(tx_buf) > 0)) {
         k_work_submit(&notify_tx_work);
         state->pending_notify = 0;
     }
