@@ -99,11 +99,7 @@ static bool rpc_read_cb(pb_istream_t *stream, uint8_t *buf, size_t count) {
                 }
             }
         } else {
-            LOG_INF("rpc_read_cb: waiting (state=%d need=%u)", rpc_framing_state,
-                    (unsigned)count);
             k_sem_take(&rpc_rx_sem, K_FOREVER);
-            LOG_INF("rpc_read_cb: woke (ring used=%u state=%d)",
-                    ring_buf_size_get(&rpc_rx_buf), rpc_framing_state);
         }
 
         ring_buf_get_finish(&rpc_rx_buf, len);
@@ -280,15 +276,12 @@ int zmk_rpc_send_notification(const zmk_studio_Notification *notification) {
 
 static void rpc_main(void) {
     for (;;) {
-        LOG_INF("rpc_main: top of loop, awaiting next request");
         pb_istream_t stream = pb_istream_for_rx_ring_buf();
         zmk_studio_Request req = zmk_studio_Request_init_zero;
 #if IS_ENABLED(CONFIG_THREAD_ANALYZER)
         thread_analyzer_print(0);
 #endif // IS_ENABLED(CONFIG_THREAD_ANALYZER)
         bool status = pb_decode(&stream, &zmk_studio_Request_msg, &req);
-        LOG_INF("rpc_main: pb_decode returned status=%d framing_state=%d", status,
-                rpc_framing_state);
 
         rpc_framing_state = FRAMING_STATE_IDLE;
 
