@@ -200,11 +200,14 @@ static zmk_studio_Response notification_response;
 static int send_response(const zmk_studio_Response *resp) {
     int ret = 0;
 
+    LOG_INF("send_response: enter");
     k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
 
     if (!selected_transport) {
+        LOG_WRN("send_response: no selected_transport, dropping");
         goto exit;
     }
+    LOG_INF("send_response: transport=%d", selected_transport->transport);
 
     void *user_data = selected_transport->tx_user_data ? selected_transport->tx_user_data() : NULL;
 
@@ -213,14 +216,18 @@ static int send_response(const zmk_studio_Response *resp) {
 
     uint8_t framing_byte = FRAMING_SOF;
     if (ring_buf_put(&rpc_tx_buf, &framing_byte, 1) != 1) {
+        LOG_ERR("send_response: SOF put failed");
         ret = -ENOSPC;
         goto reset_exit;
     }
 
     selected_transport->tx_notify(&rpc_tx_buf, 1, false, user_data);
+    LOG_INF("send_response: SOF written, encoding...");
 
     /* Now we are ready to encode the message! */
     bool status = pb_encode(&stream, &zmk_studio_Response_msg, resp);
+    LOG_INF("send_response: encode done status=%d bytes_written=%u timed_out=%d",
+            status, (unsigned)stream.bytes_written, tx_state.timed_out);
 
     if (!status) {
         if (tx_state.timed_out) {
@@ -236,14 +243,17 @@ static int send_response(const zmk_studio_Response *resp) {
 
     framing_byte = FRAMING_EOF;
     if (ring_buf_put(&rpc_tx_buf, &framing_byte, 1) != 1) {
+        LOG_ERR("send_response: EOF put failed");
         ret = -ENOSPC;
         goto reset_exit;
     }
 
     selected_transport->tx_notify(&rpc_tx_buf, 1, true, user_data);
+    LOG_INF("send_response: EOF notified, done");
     goto exit;
 
 reset_exit:
+    LOG_WRN("send_response: reset_exit ret=%d", ret);
     ring_buf_reset(&rpc_tx_buf);
 
 exit:
@@ -276,17 +286,21 @@ static void rpc_main(void) {
         rpc_framing_state = FRAMING_STATE_IDLE;
 
         if (status) {
+            LOG_INF("rpc_main: decoded req_id=%u subsystem=%u", (unsigned)req.request_id,
+                    (unsigned)req.which_subsystem);
             zmk_studio_Response resp = handle_request(&req);
-
+            LOG_INF("rpc_main: handled, sending response");
             int err = send_response(&resp);
 #if IS_ENABLED(CONFIG_THREAD_ANALYZER)
             thread_analyzer_print(0);
 #endif // IS_ENABLED(CONFIG_THREAD_ANALYZER)
             if (err < 0) {
                 LOG_ERR("Failed to send the RPC response %d", err);
+            } else {
+                LOG_INF("rpc_main: send_response ok");
             }
         } else {
-            LOG_DBG("Decode failed");
+            LOG_WRN("Decode failed");
         }
     }
 }
