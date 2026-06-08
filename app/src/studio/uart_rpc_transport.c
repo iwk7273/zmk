@@ -103,6 +103,7 @@ static void serial_cb(const struct device *dev, void *user_data) {
     if (uart_irq_rx_ready(uart_dev)) {
         /* read until FIFO empty */
         uint32_t last_read = 0, len = 0;
+        uint32_t total_this_irq = 0;
         struct ring_buf *buf = zmk_rpc_get_rx_buf();
         do {
             uint8_t *buffer;
@@ -111,6 +112,7 @@ static void serial_cb(const struct device *dev, void *user_data) {
                 last_read = uart_fifo_read(uart_dev, buffer, len);
 
                 ring_buf_put_finish(buf, last_read);
+                total_this_irq += last_read;
             } else {
                 LOG_ERR("Dropping incoming RPC byte, insufficient room in the RX buffer. Bump "
                         "CONFIG_ZMK_STUDIO_RPC_RX_BUF_SIZE.");
@@ -119,6 +121,10 @@ static void serial_cb(const struct device *dev, void *user_data) {
             }
         } while (last_read && last_read == len);
 
+        if (total_this_irq > 0) {
+            LOG_INF("serial_cb: RX %u bytes, ring used=%u", total_this_irq,
+                    ring_buf_size_get(buf));
+        }
         zmk_rpc_rx_notify();
     }
 
