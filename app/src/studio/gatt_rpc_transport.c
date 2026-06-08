@@ -140,6 +140,9 @@ static struct bt_gatt_indicate_params rpc_indicate_params = {
     .func = indicate_cb,
 };
 
+static void notif_rpc_tx_cb(struct k_work *work);
+static K_WORK_DEFINE(notify_tx_work, notif_rpc_tx_cb);
+
 static void notif_rpc_tx_cb(struct k_work *work) {
     struct bt_conn *conn = zmk_ble_active_profile_conn();
     struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
@@ -182,8 +185,6 @@ static void notif_rpc_tx_cb(struct k_work *work) {
 
     bt_conn_unref(conn);
 }
-
-static K_WORK_DEFINE(notify_tx_work, notif_rpc_tx_cb);
 
 struct gatt_write_state {
     size_t pending_notify;
