@@ -37,6 +37,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/event_manager.h>
 #include <zmk/events/ble_active_profile_changed.h>
 
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
+#include <zmk/studio/uuid.h>
+#endif
+
 #if IS_ENABLED(CONFIG_ZMK_BLE_PASSKEY_ENTRY)
 #include <zmk/events/keycode_state_changed.h>
 
@@ -76,6 +80,21 @@ static struct bt_data zmk_ble_ad[] = {
                   BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)                        /* Battery Service */
                   ),
 };
+
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
+
+static atomic_t studio_discovery_active = ATOMIC_INIT(0);
+static bool studio_discovery_advertising;
+
+static struct bt_data studio_sd[] = {
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, ZMK_BT_STUDIO_UUID(0x00000000)),
+};
+
+static void stop_studio_discovery(void);
+static void studio_discovery_timeout_handler(struct k_work *work) { stop_studio_discovery(); }
+static K_WORK_DELAYABLE_DEFINE(studio_discovery_timeout_work, studio_discovery_timeout_handler);
+
+#endif /* CONFIG_ZMK_STUDIO_TRANSPORT_BLE */
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE) && IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 
@@ -166,6 +185,20 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
     }                                                                                              \
     advertising_status = ZMK_ADV_DIR;
 
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
+#define CHECKED_OPEN_ADV()                                                                         \
+    {                                                                                              \
+        bool _disc = atomic_get(&studio_discovery_active);                                         \
+        err = bt_le_adv_start(ZMK_ADV_CONN_NAME, zmk_ble_ad, ARRAY_SIZE(zmk_ble_ad),               \
+                              _disc ? studio_sd : NULL, _disc ? ARRAY_SIZE(studio_sd) : 0);        \
+        if (err) {                                                                                 \
+            LOG_ERR("Advertising failed to start (err %d)", err);                                  \
+            return err;                                                                            \
+        }                                                                                         \
+        studio_discovery_advertising = _disc;                                                      \
+        advertising_status = ZMK_ADV_CONN;                                                        \
+    }
+#else
 #define CHECKED_OPEN_ADV()                                                                         \
     err = bt_le_adv_start(ZMK_ADV_CONN_NAME, zmk_ble_ad, ARRAY_SIZE(zmk_ble_ad), NULL, 0);         \
     if (err) {                                                                                     \
@@ -173,6 +206,7 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
         return err;                                                                                \
     }                                                                                              \
     advertising_status = ZMK_ADV_CONN;
+#endif
 
 int update_advertising(void) {
     int err = 0;
@@ -192,6 +226,11 @@ int update_advertising(void) {
         // LOG_DBG("Directed advertising to %s", addr_str);
         // desired_adv = ZMK_ADV_DIR;
     }
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
+    else if (atomic_get(&studio_discovery_active)) {
+        desired_adv = ZMK_ADV_CONN;
+    }
+#endif
     LOG_DBG("advertising from %d to %d", advertising_status, desired_adv);
 
     switch (desired_adv + CURR_ADV(advertising_status)) {
@@ -214,6 +253,14 @@ int update_advertising(void) {
     case ZMK_ADV_CONN + CURR_ADV(ZMK_ADV_NONE):
         CHECKED_OPEN_ADV();
         break;
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
+    case ZMK_ADV_CONN + CURR_ADV(ZMK_ADV_CONN):
+        if (studio_discovery_advertising != (bool)atomic_get(&studio_discovery_active)) {
+            CHECKED_ADV_STOP();
+            CHECKED_OPEN_ADV();
+        }
+        break;
+#endif
     }
 
     return 0;
@@ -222,6 +269,28 @@ int update_advertising(void) {
 static void update_advertising_callback(struct k_work *work) { update_advertising(); }
 
 K_WORK_DEFINE(update_advertising_work, update_advertising_callback);
+
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
+
+static void stop_studio_discovery(void) {
+    atomic_set(&studio_discovery_active, 0);
+    update_advertising();
+}
+
+int zmk_ble_studio_discovery_start(void) {
+    atomic_set(&studio_discovery_active, 1);
+    k_work_reschedule(&studio_discovery_timeout_work,
+                      K_SECONDS(CONFIG_ZMK_STUDIO_BLE_DISCOVERY_TIMEOUT));
+    return update_advertising();
+}
+
+int zmk_ble_studio_discovery_stop(void) {
+    k_work_cancel_delayable(&studio_discovery_timeout_work);
+    stop_studio_discovery();
+    return 0;
+}
+
+#endif /* CONFIG_ZMK_STUDIO_TRANSPORT_BLE */
 
 static void clear_profile_bond(uint8_t profile) {
     if (bt_addr_le_cmp(&profiles[profile].peer, BT_ADDR_LE_ANY)) {

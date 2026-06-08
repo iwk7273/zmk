@@ -17,7 +17,7 @@
 #include <zmk/events/ble_active_profile_changed.h>
 #include <zmk/studio/rpc.h>
 
-#include "uuid.h"
+#include <zmk/studio/uuid.h>
 
 #include <zephyr/logging/log.h>
 
@@ -34,6 +34,10 @@ static void rpc_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
     bool notif_enabled = (value == BT_GATT_CCC_INDICATE);
 
     LOG_INF("RPC Notifications %s", notif_enabled ? "enabled" : "disabled");
+
+    if (notif_enabled) {
+        zmk_ble_studio_discovery_stop();
+    }
 
 #if CONFIG_ZMK_STUDIO_TRANSPORT_BLE_PREF_LATENCY < CONFIG_BT_PERIPHERAL_PREF_LATENCY
     struct bt_conn *conn = zmk_ble_active_profile_conn();
@@ -89,7 +93,7 @@ static ssize_t write_rpc_req(struct bt_conn *conn, const struct bt_gatt_attr *at
 BT_GATT_SERVICE_DEFINE(
     rpc_interface, BT_GATT_PRIMARY_SERVICE(BT_UUID_DECLARE_128(ZMK_STUDIO_BT_SERVICE_UUID)),
     BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(ZMK_STUDIO_BT_RPC_CHRC_UUID),
-                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ | BT_GATT_CHRC_INDICATE,
+                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP | BT_GATT_CHRC_READ | BT_GATT_CHRC_INDICATE,
                            BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT, read_rpc_resp,
                            write_rpc_req, NULL),
     BT_GATT_CCC(rpc_ccc_cfg_changed, BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT));

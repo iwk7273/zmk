@@ -87,6 +87,10 @@ config BT_CONN_TX_MAX
 
 if ZMK_STUDIO_TRANSPORT_BLE
 
+config ZMK_STUDIO_BLE_DISCOVERY_TIMEOUT
+    int "Studio BLE discovery advertising timeout in seconds"
+    default 60
+
 config ZMK_STUDIO_TRANSPORT_BLE_PREF_LATENCY
     int "BLE Transport preferred latency"
     default 10
