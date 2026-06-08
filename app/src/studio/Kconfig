@@ -116,18 +116,6 @@ config ZMK_STUDIO_RPC_TX_BUF_SIZE
     default 128 if ZMK_COMBO_SETTINGS
     default 64
 
-config ZMK_STUDIO_RPC_TX_BUFFER_WAIT_TIMEOUT_MS
-    int "TX buffer write timeout in milliseconds"
-    default 500 if ZMK_STUDIO_TRANSPORT_BLE
-    default 20
-    help
-      Maximum time to wait for TX ring buffer space during RPC response
-      encoding. BLE indication is serial (one at a time, each requiring an
-      ACK) so large responses need many drain cycles. 500 ms accommodates
-      multiple 27-byte indication round-trips plus OS/browser GATT stack
-      latency. Applies to all Studio transports in the build when BLE
-      transport is enabled.
-
 endif
 
 endif
