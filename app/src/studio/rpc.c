@@ -122,7 +122,7 @@ RING_BUF_DECLARE(rpc_tx_buf, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 
 struct ring_buf *zmk_rpc_get_tx_buf(void) { return &rpc_tx_buf; }
 
-#define RPC_TX_BUFFER_WAIT_TIMEOUT_MS 20
+#define RPC_TX_BUFFER_WAIT_TIMEOUT_MS CONFIG_ZMK_STUDIO_RPC_TX_BUFFER_WAIT_TIMEOUT_MS
 
 struct rpc_tx_stream_state {
     void *user_data;
