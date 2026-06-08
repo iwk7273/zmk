@@ -99,13 +99,10 @@ BT_GATT_SERVICE_DEFINE(
     BT_GATT_CCC(rpc_ccc_cfg_changed, BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT));
 
 static uint16_t get_notify_size_for_conn(struct bt_conn *conn) {
-    uint16_t notify_size = 23; // Default MTU size unless negotiated higher
-    struct bt_conn_info conn_info;
-    if (conn && bt_conn_get_info(conn, &conn_info) >= 0) {
-        notify_size = conn_info.le.data_len->tx_max_len;
+    if (!conn) {
+        return 20;
     }
-
-    return notify_size;
+    return bt_gatt_get_mtu(conn) - 3;
 }
 
 static void refresh_notify_size(void) {
@@ -130,7 +127,7 @@ static int gatt_stop_rx(void) {
     return 0;
 }
 
-static uint8_t indicate_buffer[27];
+static uint8_t indicate_buffer[CONFIG_BT_L2CAP_TX_MTU - 3];
 
 static void indicate_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *params, uint8_t err);
 
