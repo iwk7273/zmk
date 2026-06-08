@@ -140,6 +140,50 @@ static struct bt_gatt_indicate_params rpc_indicate_params = {
 static void notif_rpc_tx_cb(struct k_work *work);
 static K_WORK_DEFINE(notify_tx_work, notif_rpc_tx_cb);
 
+/*
+ * Send a single indication carrying up to one MTU worth of bytes from tx_buf,
+ * waiting for the previous indication to complete first. Used both from the
+ * sync flush path (encoder context) and the work item (final drain).
+ *
+ * Returns 0 if an indication was queued or there was nothing to send, <0 on
+ * error. The caller is responsible for managing the conn ref count.
+ */
+static int gatt_send_one(struct bt_conn *conn, k_timeout_t sem_timeout) {
+    struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
+    if (ring_buf_size_get(tx_buf) == 0) {
+        return 0;
+    }
+
+    int ret = k_sem_take(&indicate_sem, sem_timeout);
+    if (ret < 0) {
+        return ret;
+    }
+
+    uint16_t notify_size = MIN(get_notify_size_for_conn(conn), sizeof(indicate_buffer));
+    uint16_t added = 0;
+    while (added < notify_size && ring_buf_size_get(tx_buf) > 0) {
+        uint8_t *buf;
+        int len = ring_buf_get_claim(tx_buf, &buf, notify_size - added);
+
+        memcpy(indicate_buffer + added, buf, len);
+
+        added += len;
+        ring_buf_get_finish(tx_buf, len);
+    }
+
+    rpc_indicate_params.len = added;
+
+    int err = bt_gatt_indicate(conn, &rpc_indicate_params);
+    if (err < 0) {
+        LOG_ERR("Failed to send indication (%d)", err);
+        k_sem_give(&indicate_sem);
+        return err;
+    }
+
+    /* indicate_cb will release indicate_sem after ACK */
+    return 0;
+}
+
 static void notif_rpc_tx_cb(struct k_work *work) {
     struct bt_conn *conn = zmk_ble_active_profile_conn();
     struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
@@ -150,34 +194,12 @@ static void notif_rpc_tx_cb(struct k_work *work) {
         return;
     }
 
-    uint16_t notify_size = MIN(get_notify_size_for_conn(conn), sizeof(indicate_buffer));
-
-    if (ring_buf_size_get(tx_buf) > 0) {
-        int ret = k_sem_take(&indicate_sem, K_NO_WAIT);
-        if (ret < 0) {
-            bt_conn_unref(conn);
-            return;
-        }
-
-        uint16_t added = 0;
-        while (added < notify_size && ring_buf_size_get(tx_buf) > 0) {
-            uint8_t *buf;
-            int len = ring_buf_get_claim(tx_buf, &buf, notify_size - added);
-
-            memcpy(indicate_buffer + added, buf, len);
-
-            added += len;
-            ring_buf_get_finish(tx_buf, len);
-        }
-
-        rpc_indicate_params.len = added;
-
-        int err = bt_gatt_indicate(conn, &rpc_indicate_params);
-        if (err < 0) {
-            LOG_ERR("Failed to send indication (%d), retrying", err);
-            k_sem_give(&indicate_sem);
-            k_work_submit(&notify_tx_work);
-        }
+    int err = gatt_send_one(conn, K_NO_WAIT);
+    if (err == -EBUSY || err == -EAGAIN) {
+        /* prior indication still in-flight; indicate_cb will resubmit us */
+    } else if (err < 0) {
+        LOG_ERR("Failed to drain tx_buf (%d), retrying", err);
+        k_work_submit(&notify_tx_work);
     }
 
     bt_conn_unref(conn);
@@ -195,6 +217,37 @@ static void indicate_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *pa
     k_work_submit(&notify_tx_work);
 }
 
+/*
+ * Synchronously drain the tx_buf one indication at a time until tx_buf has room
+ * for the encoder to make progress, or we hit an error / timeout.
+ *
+ * Called from gatt_tx_notify in encoder context when the ring_buf is filling up
+ * faster than the work item can drain it. By waiting here for the indication
+ * ACK we keep the ring_buf small enough that the encoder doesn't block on
+ * rpc_tx_buffer_write claim failures, which lets us use the same modest TX_BUF
+ * size on USB and BLE builds.
+ */
+static int gatt_sync_flush(void) {
+    struct bt_conn *conn = zmk_ble_active_profile_conn();
+    if (!conn) {
+        struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
+        ring_buf_reset(tx_buf);
+        return -ENOTCONN;
+    }
+
+    int err = gatt_send_one(conn, K_MSEC(200));
+    bt_conn_unref(conn);
+    if (err == -EAGAIN || err == -EBUSY) {
+        /* Prior indication never ACKed within the window — link likely stalled.
+         * Drop the pending response so we don't loop forever in tx_notify.
+         */
+        struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
+        ring_buf_reset(tx_buf);
+        LOG_ERR("gatt_sync_flush: indicate_sem timed out, dropping pending TX");
+    }
+    return err;
+}
+
 static void gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done, void *user_data) {
     struct gatt_write_state *state = (struct gatt_write_state *)user_data;
 
@@ -202,9 +255,27 @@ static void gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done,
 
     atomic_t ns = atomic_get(&notify_size);
 
-    if (msg_done || state->pending_notify > ns ||
-        (added == 0 && ring_buf_size_get(tx_buf) > 0)) {
+    if (added == 0 && ring_buf_size_get(tx_buf) > 0) {
+        /* Encoder is stalled waiting for tx_buf room — drain in our context. */
+        gatt_sync_flush();
+        state->pending_notify = 0;
+        return;
+    }
+
+    if (msg_done) {
+        /* End of message: hand the remainder to the work item so this call
+         * returns quickly and the encoder can finish.
+         */
         k_work_submit(&notify_tx_work);
+        state->pending_notify = 0;
+        return;
+    }
+
+    if (state->pending_notify > ns) {
+        /* Got at least one indication worth of fresh bytes; drain now so the
+         * ring_buf doesn't fill up and stall the encoder.
+         */
+        gatt_sync_flush();
         state->pending_notify = 0;
     }
 }
