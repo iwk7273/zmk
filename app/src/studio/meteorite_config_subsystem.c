@@ -323,6 +323,17 @@ static bool encode_config_fields(pb_ostream_t *stream, const pb_field_t *field, 
     return true;
 }
 
+/* The firmware-side bounds and the nanopb static array sizes (max_count in
+ * meteorite.options.in) are maintained in two repos by convention; pin them
+ * together so a divergence becomes a compile error instead of a silent
+ * truncation (encode) or validation mismatch (decode). */
+BUILD_ASSERT(ZMK_CUSTOM_CONFIG_MAX_LAYERS ==
+                 ARRAY_SIZE(((zmk_meteorite_BallConfig *)0)->layer_profiles),
+             "nanopb layer_profiles max_count must match ZMK_CUSTOM_CONFIG_MAX_LAYERS");
+BUILD_ASSERT(ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS ==
+                 ARRAY_SIZE(((zmk_meteorite_BallConfig *)0)->user1_bindings),
+             "nanopb user1_bindings max_count must match ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS");
+
 static zmk_meteorite_BallConfig ball_config_from(const struct zmk_custom_config *cfg) {
     zmk_meteorite_BallConfig ball = zmk_meteorite_BallConfig_init_zero;
 
