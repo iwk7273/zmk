@@ -102,7 +102,14 @@ static uint16_t get_notify_size_for_conn(struct bt_conn *conn) {
     if (!conn) {
         return 20;
     }
-    return bt_gatt_get_mtu(conn) - 3;
+    uint16_t mtu = bt_gatt_get_mtu(conn);
+    if (mtu < 23) {
+        /* bt_gatt_get_mtu returns 0 for a connection that isn't (yet) in the
+         * connected state; fall back to the minimum ATT payload instead of
+         * letting `mtu - 3` underflow. */
+        return 20;
+    }
+    return mtu - 3;
 }
 
 static void refresh_notify_size(void) {
@@ -171,6 +178,14 @@ static int gatt_send_one(struct bt_conn *conn, k_timeout_t sem_timeout) {
         ring_buf_get_finish(tx_buf, len);
     }
 
+    if (added == 0) {
+        /* The other consumer (work item vs. sync flush) drained the buffer
+         * while we waited for the semaphore; don't waste an indication round
+         * trip on an empty payload. */
+        k_sem_give(&indicate_sem);
+        return 0;
+    }
+
     rpc_indicate_params.len = added;
 
     int err = bt_gatt_indicate(conn, &rpc_indicate_params);
@@ -185,21 +200,38 @@ static int gatt_send_one(struct bt_conn *conn, k_timeout_t sem_timeout) {
 }
 
 static void notif_rpc_tx_cb(struct k_work *work) {
+    /* Only ever touched from this handler (single system workqueue thread). */
+    static int consecutive_failures;
+
     struct bt_conn *conn = zmk_ble_active_profile_conn();
     struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
 
     if (!conn) {
         LOG_WRN("No active connection for queued data, dropping");
         ring_buf_reset(tx_buf);
+        consecutive_failures = 0;
         return;
     }
 
     int err = gatt_send_one(conn, K_NO_WAIT);
     if (err == -EBUSY || err == -EAGAIN) {
         /* prior indication still in-flight; indicate_cb will resubmit us */
+        consecutive_failures = 0;
     } else if (err < 0) {
-        LOG_ERR("Failed to drain tx_buf (%d), retrying", err);
-        k_work_submit(&notify_tx_work);
+        /* A half-dead link can keep failing the indicate while the conn object
+         * still resolves; bound the immediate retries so this work item doesn't
+         * spin on the system workqueue until the conn finally drops. */
+        if (++consecutive_failures < 5) {
+            LOG_ERR("Failed to drain tx_buf (%d), retrying", err);
+            k_work_submit(&notify_tx_work);
+        } else {
+            LOG_ERR("Failed to drain tx_buf (%d) %d times in a row, dropping pending TX", err,
+                    consecutive_failures);
+            ring_buf_reset(tx_buf);
+            consecutive_failures = 0;
+        }
+    } else {
+        consecutive_failures = 0;
     }
 
     bt_conn_unref(conn);
