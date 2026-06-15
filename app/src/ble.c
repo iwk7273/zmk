@@ -96,45 +96,6 @@ static K_WORK_DELAYABLE_DEFINE(studio_discovery_timeout_work, studio_discovery_t
 
 #endif /* CONFIG_ZMK_STUDIO_TRANSPORT_BLE */
 
-static const char *adv_type_name(enum advertising_type type) {
-    switch (type) {
-    case ZMK_ADV_NONE:
-        return "none";
-    case ZMK_ADV_DIR:
-        return "directed";
-    case ZMK_ADV_CONN:
-        return "connectable";
-    default:
-        return "unknown";
-    }
-}
-
-static void log_profile_debug_state(const char *tag, uint8_t index) {
-    if (index >= ZMK_BLE_PROFILE_COUNT) {
-        LOG_INF("BLE_DBG %s active=%u index=%u invalid adv=%s", tag,
-                (unsigned int)active_profile, (unsigned int)index,
-                adv_type_name(advertising_status));
-        return;
-    }
-
-    char addr[BT_ADDR_LE_STR_LEN];
-    bt_addr_le_to_str(&profiles[index].peer, addr, sizeof(addr));
-    bool open = zmk_ble_profile_is_open(index);
-    bool connected = zmk_ble_profile_is_connected(index);
-
-#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
-    LOG_INF("BLE_DBG %s active=%u index=%u addr=%s open=%d connected=%d adv=%s "
-            "studio_active=%d studio_adv=%d",
-            tag, (unsigned int)active_profile, (unsigned int)index, addr, open, connected,
-            adv_type_name(advertising_status),
-            (int)atomic_get(&studio_discovery_active), studio_discovery_advertising);
-#else
-    LOG_INF("BLE_DBG %s active=%u index=%u addr=%s open=%d connected=%d adv=%s", tag,
-            (unsigned int)active_profile, (unsigned int)index, addr, open, connected,
-            adv_type_name(advertising_status));
-#endif
-}
-
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE) && IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 
 static bt_addr_le_t peripheral_addrs[ZMK_SPLIT_BLE_PERIPHERAL_COUNT];
@@ -252,12 +213,10 @@ int update_advertising(void) {
     bt_addr_le_t *addr;
     struct bt_conn *conn;
     enum advertising_type desired_adv = ZMK_ADV_NONE;
-    bool active_open = zmk_ble_active_profile_is_open();
-    bool active_connected = zmk_ble_active_profile_is_connected();
 
-    if (active_open) {
+    if (zmk_ble_active_profile_is_open()) {
         desired_adv = ZMK_ADV_CONN;
-    } else if (!active_connected) {
+    } else if (!zmk_ble_active_profile_is_connected()) {
         desired_adv = ZMK_ADV_CONN;
         // Need to fix directed advertising for privacy centrals. See
         // https://github.com/zephyrproject-rtos/zephyr/pull/14984 char
@@ -271,19 +230,6 @@ int update_advertising(void) {
     else if (atomic_get(&studio_discovery_active)) {
         desired_adv = ZMK_ADV_CONN;
     }
-#endif
-    char active_addr[BT_ADDR_LE_STR_LEN];
-    bt_addr_le_to_str(zmk_ble_active_profile_addr(), active_addr, sizeof(active_addr));
-#if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
-    LOG_INF("BLE_DBG adv_update active=%u addr=%s open=%d connected=%d from=%s to=%s "
-            "studio_active=%d studio_adv=%d",
-            (unsigned int)active_profile, active_addr, active_open, active_connected,
-            adv_type_name(advertising_status), adv_type_name(desired_adv),
-            (int)atomic_get(&studio_discovery_active), studio_discovery_advertising);
-#else
-    LOG_INF("BLE_DBG adv_update active=%u addr=%s open=%d connected=%d from=%s to=%s",
-            (unsigned int)active_profile, active_addr, active_open, active_connected,
-            adv_type_name(advertising_status), adv_type_name(desired_adv));
 #endif
     LOG_DBG("advertising from %d to %d", advertising_status, desired_adv);
 
@@ -414,20 +360,14 @@ int zmk_ble_prof_select(uint8_t index) {
 
     LOG_DBG("profile %d", index);
     if (active_profile == index) {
-        log_profile_debug_state("prof_select_same", index);
         return 0;
     }
-
-    LOG_INF("BLE_DBG prof_select from=%u to=%u", (unsigned int)active_profile,
-            (unsigned int)index);
-    log_profile_debug_state("prof_select_before", active_profile);
 
     active_profile = index;
     ble_save_profile();
 
     update_advertising();
 
-    log_profile_debug_state("prof_select_after", active_profile);
     raise_profile_changed_event();
 
     return 0;
@@ -640,10 +580,6 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     advertising_status = ZMK_ADV_NONE;
-    LOG_INF("BLE_DBG connected_cb addr=%s err=%u role=%u active=%u is_active=%d adv=%s", addr,
-            (unsigned int)err, (unsigned int)info.role, (unsigned int)active_profile,
-            is_conn_active_profile(conn),
-            adv_type_name(advertising_status));
 
     if (err) {
         LOG_WRN("Failed to connect to %s (%u)", addr, err);
@@ -675,10 +611,6 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
         LOG_DBG("SKIPPING FOR ROLE %d", info.role);
         return;
     }
-
-    LOG_INF("BLE_DBG disconnected_cb addr=%s reason=0x%02x role=%u active=%u is_active=%d adv=%s",
-            addr, (unsigned int)reason, (unsigned int)info.role, (unsigned int)active_profile,
-            is_conn_active_profile(conn), adv_type_name(advertising_status));
 
     // We need to do this in a work callback, otherwise the advertising update will still see the
     // connection for a profile as active, and not start advertising yet.
