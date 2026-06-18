@@ -115,15 +115,20 @@ static uint16_t get_notify_size_for_conn(struct bt_conn *conn) {
     return MIN(payload_size, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 }
 
-static void refresh_notify_size(void) {
+static uint16_t current_notify_size(void) {
     struct bt_conn *conn = zmk_ble_active_profile_conn();
-
     uint16_t ns = get_notify_size_for_conn(conn);
+
     if (conn) {
         bt_conn_unref(conn);
     }
 
     atomic_set(&notify_size, ns);
+    return ns;
+}
+
+static void refresh_notify_size(void) {
+    (void)current_notify_size();
 }
 
 static int gatt_start_rx() {
@@ -288,7 +293,7 @@ static void gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done,
 
     state->pending_notify += added;
 
-    atomic_t ns = atomic_get(&notify_size);
+    uint16_t ns = current_notify_size();
 
     if (added == 0 && ring_buf_size_get(tx_buf) > 0) {
         /* Encoder is stalled waiting for tx_buf room — drain in our context. */
