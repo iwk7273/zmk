@@ -99,17 +99,20 @@ BT_GATT_SERVICE_DEFINE(
     BT_GATT_CCC(rpc_ccc_cfg_changed, BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT));
 
 static uint16_t get_notify_size_for_conn(struct bt_conn *conn) {
+    uint16_t payload_size = 20;
+
     if (!conn) {
-        return 20;
+        return MIN(payload_size, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
     }
     uint16_t mtu = bt_gatt_get_mtu(conn);
-    if (mtu < 23) {
+    if (mtu >= 23) {
+        payload_size = mtu - 3;
+    } else {
         /* bt_gatt_get_mtu returns 0 for a connection that isn't (yet) in the
          * connected state; fall back to the minimum ATT payload instead of
          * letting `mtu - 3` underflow. */
-        return 20;
     }
-    return mtu - 3;
+    return MIN(payload_size, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 }
 
 static void refresh_notify_size(void) {
@@ -303,7 +306,7 @@ static void gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done,
         return;
     }
 
-    if (state->pending_notify > ns) {
+    if (state->pending_notify >= ns) {
         /* Got at least one indication worth of fresh bytes; drain now so the
          * ring_buf doesn't fill up and stall the encoder.
          */
