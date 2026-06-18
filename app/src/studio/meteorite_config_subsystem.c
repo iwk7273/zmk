@@ -13,6 +13,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
@@ -334,44 +335,45 @@ BUILD_ASSERT(ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS ==
                  ARRAY_SIZE(((zmk_meteorite_BallConfig *)0)->user1_bindings),
              "nanopb user1_bindings max_count must match ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS");
 
-static zmk_meteorite_BallConfig ball_config_from(const struct zmk_custom_config *cfg) {
-    zmk_meteorite_BallConfig ball = zmk_meteorite_BallConfig_init_zero;
+static void populate_ball_config(zmk_meteorite_BallConfig *ball,
+                                 const struct zmk_custom_config *cfg) {
+    memset(ball, 0, sizeof(*ball));
 
     uint8_t layer_count = zmk_custom_config_layer_count();
     if (layer_count > ZMK_CUSTOM_CONFIG_MAX_LAYERS) {
         layer_count = ZMK_CUSTOM_CONFIG_MAX_LAYERS;
     }
-    ball.layer_profiles_count = layer_count;
+    ball->layer_profiles_count = layer_count;
     for (uint8_t i = 0; i < layer_count; i++) {
-        ball.layer_profiles[i] = (zmk_meteorite_BallProfile)cfg->layer_profiles[i];
+        ball->layer_profiles[i] = (zmk_meteorite_BallProfile)cfg->layer_profiles[i];
     }
 
-    ball.sensitivity = (zmk_meteorite_BallSensitivity)cfg->ball_sensitivity;
+    ball->sensitivity = (zmk_meteorite_BallSensitivity)cfg->ball_sensitivity;
 
-    ball.user1_bindings_count = ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS;
+    ball->user1_bindings_count = ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS;
     for (int d = 0; d < ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS; d++) {
-        ball.user1_bindings[d].behavior_id = (int32_t)cfg->user1[d].behavior_local_id;
-        ball.user1_bindings[d].param1 = cfg->user1[d].param1;
-        ball.user1_bindings[d].param2 = cfg->user1[d].param2;
+        ball->user1_bindings[d].behavior_id = (int32_t)cfg->user1[d].behavior_local_id;
+        ball->user1_bindings[d].param1 = cfg->user1[d].param1;
+        ball->user1_bindings[d].param2 = cfg->user1[d].param2;
     }
-    return ball;
 }
 
-static zmk_meteorite_ConfigValues config_values_from(const struct zmk_custom_config *cfg) {
-    return (zmk_meteorite_ConfigValues){
-        .cpi_idx = cfg->cpi_idx,
-        .scroll_div = cfg->scroll_div,
-        .rotation_idx = cfg->rotation_idx,
-        .scroll_h_rev = cfg->scroll_h_rev,
-        .scroll_v_rev = cfg->scroll_v_rev,
-        .scaling_mode = cfg->scaling_mode,
-        .scroll_scaling_mode = cfg->scroll_scaling_mode,
-        .scroll_layer_1 = cfg->scroll_layer_1,
-        .scroll_layer_2 = cfg->scroll_layer_2,
-        .os_mode = cfg->os_mode,
-        .has_ball_config = true,
-        .ball_config = ball_config_from(cfg),
-    };
+static void populate_config_values(zmk_meteorite_ConfigValues *values,
+                                   const struct zmk_custom_config *cfg) {
+    memset(values, 0, sizeof(*values));
+
+    values->cpi_idx = cfg->cpi_idx;
+    values->scroll_div = cfg->scroll_div;
+    values->rotation_idx = cfg->rotation_idx;
+    values->scroll_h_rev = cfg->scroll_h_rev;
+    values->scroll_v_rev = cfg->scroll_v_rev;
+    values->scaling_mode = cfg->scaling_mode;
+    values->scroll_scaling_mode = cfg->scroll_scaling_mode;
+    values->scroll_layer_1 = cfg->scroll_layer_1;
+    values->scroll_layer_2 = cfg->scroll_layer_2;
+    values->os_mode = cfg->os_mode;
+    values->has_ball_config = true;
+    populate_ball_config(&values->ball_config, cfg);
 }
 
 static void apply_ball_config(struct zmk_custom_config *cfg, const zmk_meteorite_BallConfig *ball) {
@@ -475,25 +477,29 @@ static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
     return true;
 }
 
-static zmk_meteorite_ConfigState config_state_msg(bool include_fields) {
-    zmk_meteorite_ConfigState state = zmk_meteorite_ConfigState_init_zero;
+static void populate_config_state(zmk_meteorite_ConfigState *state, bool include_fields) {
+    memset(state, 0, sizeof(*state));
     const struct zmk_custom_config *current = zmk_custom_config_get();
 
-    state.schema_version = METEORITE_CONFIG_SCHEMA_VERSION;
-    state.has_current = true;
-    state.current = config_values_from(current);
-    state.has_saved = true;
-    state.saved = config_values_from(zmk_custom_config_saved_get());
-    state.has_defaults = true;
-    state.defaults = config_values_from(zmk_custom_config_defaults_get());
-    state.dirty = zmk_custom_config_check_unsaved_changes();
+    state->schema_version = METEORITE_CONFIG_SCHEMA_VERSION;
+    state->has_current = true;
+    populate_config_values(&state->current, current);
+    state->has_saved = true;
+    populate_config_values(&state->saved, zmk_custom_config_saved_get());
+    state->has_defaults = true;
+    populate_config_values(&state->defaults, zmk_custom_config_defaults_get());
+    state->dirty = zmk_custom_config_check_unsaved_changes();
 
-    state.firmware_feature_version.funcs.encode = encode_string;
-    state.firmware_feature_version.arg = (void *)METEORITE_CONFIG_FEATURE_VERSION;
+    state->firmware_feature_version.funcs.encode = encode_string;
+    state->firmware_feature_version.arg = (void *)METEORITE_CONFIG_FEATURE_VERSION;
     if (include_fields) {
-        state.fields.funcs.encode = encode_config_fields;
+        state->fields.funcs.encode = encode_config_fields;
     }
+}
 
+static zmk_meteorite_ConfigState config_state_msg(bool include_fields) {
+    zmk_meteorite_ConfigState state;
+    populate_config_state(&state, include_fields);
     return state;
 }
 
@@ -590,8 +596,8 @@ static void send_config_state_changed_notification(void) {
     meteorite_notification.which_subsystem = zmk_studio_Notification_meteorite_tag;
     meteorite_notification.subsystem.meteorite.which_notification_type =
         zmk_meteorite_Notification_config_state_changed_tag;
-    meteorite_notification.subsystem.meteorite.notification_type.config_state_changed =
-        config_state_msg(false);
+    populate_config_state(
+        &meteorite_notification.subsystem.meteorite.notification_type.config_state_changed, false);
 
     zmk_rpc_send_notification(&meteorite_notification);
     k_mutex_unlock(&meteorite_notification_mutex);
@@ -611,13 +617,42 @@ static void send_unsaved_changes_status_changed_notification(bool dirty) {
     k_mutex_unlock(&meteorite_notification_mutex);
 }
 
+enum meteorite_notification_pending_bits {
+    METEORITE_NOTIFICATION_PENDING_CONFIG_STATE = BIT(0),
+    METEORITE_NOTIFICATION_PENDING_UNSAVED_STATUS = BIT(1),
+};
+
+static atomic_t meteorite_notification_pending;
+
+static void meteorite_notification_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    for (;;) {
+        atomic_val_t pending = atomic_set(&meteorite_notification_pending, 0);
+        if (pending == 0) {
+            return;
+        }
+
+        if ((pending & METEORITE_NOTIFICATION_PENDING_CONFIG_STATE) != 0) {
+            send_config_state_changed_notification();
+        }
+
+        if ((pending & METEORITE_NOTIFICATION_PENDING_UNSAVED_STATUS) != 0) {
+            send_unsaved_changes_status_changed_notification(
+                zmk_custom_config_check_unsaved_changes());
+        }
+    }
+}
+
+static K_WORK_DEFINE(meteorite_notification_work, meteorite_notification_work_handler);
+
 void zmk_custom_config_changed(const struct zmk_custom_config *cfg) {
     ARG_UNUSED(cfg);
 
-    send_config_state_changed_notification();
-
-    bool dirty = zmk_custom_config_check_unsaved_changes();
-    send_unsaved_changes_status_changed_notification(dirty);
+    atomic_or(&meteorite_notification_pending,
+              METEORITE_NOTIFICATION_PENDING_CONFIG_STATE |
+                  METEORITE_NOTIFICATION_PENDING_UNSAVED_STATUS);
+    k_work_submit(&meteorite_notification_work);
 }
 
 ZMK_RPC_SUBSYSTEM_HANDLER(meteorite, get_config_state, ZMK_STUDIO_RPC_HANDLER_SECURED);
