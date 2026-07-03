@@ -28,6 +28,12 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 #define METEORITE_CONFIG_SCHEMA_VERSION 3
 #define METEORITE_CONFIG_FEATURE_VERSION "1.2.0"
 
+#ifdef CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
+#define METEORITE_FIRMWARE_BUILD_VERSION CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
+#else
+#define METEORITE_FIRMWARE_BUILD_VERSION ""
+#endif
+
 ZMK_RPC_SUBSYSTEM(meteorite)
 
 #define METEORITE_RESPONSE(type, ...) ZMK_RPC_RESPONSE(meteorite, type, __VA_ARGS__)
@@ -492,6 +498,8 @@ static void populate_config_state(zmk_meteorite_ConfigState *state, bool include
 
     state->firmware_feature_version.funcs.encode = encode_string;
     state->firmware_feature_version.arg = (void *)METEORITE_CONFIG_FEATURE_VERSION;
+    state->firmware_build_version.funcs.encode = encode_string;
+    state->firmware_build_version.arg = (void *)METEORITE_FIRMWARE_BUILD_VERSION;
     if (include_fields) {
         state->fields.funcs.encode = encode_config_fields;
     }
