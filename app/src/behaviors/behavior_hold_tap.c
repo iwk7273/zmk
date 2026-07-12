@@ -19,6 +19,10 @@
 #include <zmk/events/keycode_state_changed.h>
 #include <zmk/behavior.h>
 
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+#include <zmk/custom_feature.h>
+#endif
+
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
@@ -52,8 +56,15 @@ enum decision_moment {
     HT_QUICK_TAP,
 };
 
+enum tapping_term_source {
+    TAPPING_TERM_SOURCE_STATIC,
+    TAPPING_TERM_SOURCE_MOD_TAP,
+    TAPPING_TERM_SOURCE_LAYER_TAP,
+};
+
 struct behavior_hold_tap_config {
     int tapping_term_ms;
+    enum tapping_term_source tapping_term_source;
     char *hold_behavior_dev;
     char *tap_behavior_dev;
     int quick_tap_ms;
@@ -82,6 +93,7 @@ struct active_hold_tap {
     uint32_t param_hold;
     uint32_t param_tap;
     int64_t timestamp;
+    int tapping_term_ms;
     enum status status;
     const struct behavior_hold_tap_config *config;
     struct k_work_delayable work;
@@ -128,6 +140,22 @@ struct last_tapped {
 // Set time stamp to large negative number initially for test suites, but not
 // int64 min since it will overflow if -1 is added
 struct last_tapped last_tapped = {INT32_MIN, INT32_MIN};
+
+static int resolve_tapping_term_ms(const struct behavior_hold_tap_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    switch (config->tapping_term_source) {
+    case TAPPING_TERM_SOURCE_MOD_TAP:
+        return zmk_custom_config_mod_tap_tapping_term_ms();
+    case TAPPING_TERM_SOURCE_LAYER_TAP:
+        return zmk_custom_config_layer_tap_tapping_term_ms();
+    case TAPPING_TERM_SOURCE_STATIC:
+    default:
+        break;
+    }
+#endif
+
+    return config->tapping_term_ms;
+}
 
 static void store_last_tapped(int64_t timestamp) {
     if (timestamp > last_tapped.timestamp) {
@@ -268,6 +296,7 @@ static struct active_hold_tap *store_hold_tap(struct zmk_behavior_binding_event 
         active_hold_taps[i].param_hold = param_hold;
         active_hold_taps[i].param_tap = param_tap;
         active_hold_taps[i].timestamp = event->timestamp;
+        active_hold_taps[i].tapping_term_ms = resolve_tapping_term_ms(config);
         active_hold_taps[i].position_of_first_other_key_pressed = -1;
         return &active_hold_taps[i];
     }
@@ -634,7 +663,7 @@ static int on_hold_tap_binding_pressed(struct zmk_behavior_binding *binding,
 
     // if this behavior was queued we have to adjust the timer to only
     // wait for the remaining time.
-    int32_t tapping_term_ms_left = (hold_tap->timestamp + cfg->tapping_term_ms) - k_uptime_get();
+    int32_t tapping_term_ms_left = (hold_tap->timestamp + hold_tap->tapping_term_ms) - k_uptime_get();
     k_work_schedule(&hold_tap->work, K_MSEC(tapping_term_ms_left));
 
     return ZMK_BEHAVIOR_OPAQUE;
@@ -651,7 +680,7 @@ static int on_hold_tap_binding_released(struct zmk_behavior_binding *binding,
     // If these events were queued, the timer event may be queued too late or not at all.
     // We insert a timer event before the TH_KEY_UP event to verify.
     int work_cancel_result = k_work_cancel_delayable(&hold_tap->work);
-    if (event.timestamp > (hold_tap->timestamp + hold_tap->config->tapping_term_ms)) {
+    if (event.timestamp > (hold_tap->timestamp + hold_tap->tapping_term_ms)) {
         decide_hold_tap(hold_tap, HT_TIMER_EVENT);
     }
 
@@ -758,7 +787,7 @@ static int position_state_changed_listener(const zmk_event_t *eh) {
     // We make a timer decision before the other key events are handled if the timer would
     // have run out.
     if (ev->timestamp >
-        (undecided_hold_tap->timestamp + undecided_hold_tap->config->tapping_term_ms)) {
+        (undecided_hold_tap->timestamp + undecided_hold_tap->tapping_term_ms)) {
         decide_hold_tap(undecided_hold_tap, HT_TIMER_EVENT);
     }
 
@@ -860,6 +889,8 @@ static int behavior_hold_tap_init(const struct device *dev) {
 #define KP_INST(n)                                                                                 \
     static const struct behavior_hold_tap_config behavior_hold_tap_config_##n = {                  \
         .tapping_term_ms = DT_INST_PROP(n, tapping_term_ms),                                       \
+        .tapping_term_source =                                                                    \
+            DT_ENUM_IDX(DT_DRV_INST(n), meteorite_tapping_term_source),                           \
         .hold_behavior_dev = DEVICE_DT_NAME(DT_INST_PHANDLE_BY_IDX(n, bindings, 0)),               \
         .tap_behavior_dev = DEVICE_DT_NAME(DT_INST_PHANDLE_BY_IDX(n, bindings, 1)),                \
         .quick_tap_ms = DT_INST_PROP(n, quick_tap_ms),                                             \

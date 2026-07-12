@@ -22,6 +22,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #include <zmk/activity.h>
 
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+#include <zmk/custom_feature.h>
+#endif
+
 #if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
 #include <zmk/usb.h>
 #endif
@@ -42,10 +46,22 @@ static enum zmk_activity_state activity_state;
 
 static uint32_t activity_last_uptime;
 
-#define MAX_IDLE_MS CONFIG_ZMK_IDLE_TIMEOUT
+static uint32_t activity_idle_timeout_ms(void) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    return (uint32_t)zmk_custom_config_idle_timeout_s() * 1000U;
+#else
+    return CONFIG_ZMK_IDLE_TIMEOUT;
+#endif
+}
 
 #if IS_ENABLED(CONFIG_ZMK_SLEEP)
-#define MAX_SLEEP_MS CONFIG_ZMK_IDLE_SLEEP_TIMEOUT
+static uint32_t activity_sleep_timeout_ms(void) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    return (uint32_t)zmk_custom_config_idle_sleep_timeout_s() * 1000U;
+#else
+    return CONFIG_ZMK_IDLE_SLEEP_TIMEOUT;
+#endif
+}
 #endif
 
 int raise_event(void) {
@@ -74,8 +90,10 @@ static int activity_event_listener(const zmk_event_t *eh) { return note_activity
 void activity_work_handler(struct k_work *work) {
     int32_t current = k_uptime_get();
     int32_t inactive_time = current - activity_last_uptime;
+    uint32_t idle_timeout_ms = activity_idle_timeout_ms();
 #if IS_ENABLED(CONFIG_ZMK_SLEEP)
-    if (inactive_time > MAX_SLEEP_MS && !is_usb_power_present()) {
+    uint32_t sleep_timeout_ms = activity_sleep_timeout_ms();
+    if (sleep_timeout_ms != 0 && inactive_time > sleep_timeout_ms && !is_usb_power_present()) {
         // Put devices in suspend power mode before sleeping
         set_state(ZMK_ACTIVITY_SLEEP);
 
@@ -86,11 +104,16 @@ void activity_work_handler(struct k_work *work) {
         }
 
         sys_poweroff();
-    } else
+        return;
+    }
 #endif /* IS_ENABLED(CONFIG_ZMK_SLEEP) */
-        if (inactive_time > MAX_IDLE_MS) {
-            set_state(ZMK_ACTIVITY_IDLE);
-        }
+    if (idle_timeout_ms != 0 && inactive_time > idle_timeout_ms) {
+        set_state(ZMK_ACTIVITY_IDLE);
+    } else {
+        // A newly disabled or extended timeout must wake an already-idle
+        // keyboard without waiting for the next input event.
+        set_state(ZMK_ACTIVITY_ACTIVE);
+    }
 }
 
 K_WORK_DEFINE(activity_work, activity_work_handler);
