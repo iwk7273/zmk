@@ -334,15 +334,38 @@ static struct zmk_behavior_binding sensor_direction_bindings_behavior(void) {
     };
 }
 
+#if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE)
+static int init_sensor_direction_bindings_from_stock(zmk_keymap_layer_id_t layer_id,
+                                                     uint16_t sensor_idx) {
+    for (int p = 0; p < ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT; p++) {
+        int ret = zmk_behavior_sensor_rotate_get_binding_param(
+            &zmk_stock_sensor_keymap[layer_id][sensor_idx],
+            (enum zmk_keymap_sensor_binding_param)p,
+            &zmk_sensor_direction_keymap[layer_id][sensor_idx][p]);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    zmk_sensor_direction_keymap_overrides[layer_id][sensor_idx] = true;
+    return 0;
+}
+#endif
+
 static int init_sensor_direction_bindings_from_current(zmk_keymap_layer_id_t layer_id,
                                                        uint16_t sensor_idx) {
     struct zmk_behavior_binding current = zmk_sensor_keymap[layer_id][sensor_idx];
 
     if (is_sensor_direction_bindings_behavior(current.behavior_dev)) {
-        memset(zmk_sensor_direction_keymap[layer_id][sensor_idx], 0,
-               sizeof(zmk_sensor_direction_keymap[layer_id][sensor_idx]));
-        zmk_sensor_direction_keymap_overrides[layer_id][sensor_idx] = true;
-        return 0;
+#if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE)
+        // The direction wrapper does not contain the bindings it dispatches to. This state can
+        // occur while restoring settings when keymap/s exists but one or both keymap/sd entries
+        // are missing. Seed from the stock sensor binding instead of manufacturing invalid #0
+        // bindings for the missing directions.
+        return init_sensor_direction_bindings_from_stock(layer_id, sensor_idx);
+#else
+        return -ENOTSUP;
+#endif
     }
 
     for (int p = 0; p < ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT; p++) {
@@ -408,6 +431,8 @@ static uint8_t zmk_sensor_pending_changes[ZMK_KEYMAP_LAYERS_LEN][SENSOR_PENDING_
 #if ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
 static uint8_t zmk_sensor_direction_pending_changes[ZMK_KEYMAP_LAYERS_LEN]
                                                  [ZMK_KEYMAP_SENSORS_LEN];
+static uint8_t zmk_sensor_direction_loaded_settings[ZMK_KEYMAP_LAYERS_LEN]
+                                                   [ZMK_KEYMAP_SENSORS_LEN];
 #endif
 #endif /* ZMK_KEYMAP_HAS_SENSORS */
 
@@ -1461,11 +1486,6 @@ static int keymap_handle_set(const char *name, size_t len, settings_read_cb read
 
         k_mutex_lock(&zmk_sensor_keymap_mutex, K_FOREVER);
         zmk_sensor_keymap[layer][sensor_idx] = binding;
-#if ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
-        if (!is_sensor_direction_bindings_behavior(binding.behavior_dev)) {
-            clear_sensor_direction_bindings(layer, sensor_idx);
-        }
-#endif
         k_mutex_unlock(&zmk_sensor_keymap_mutex);
     }
 #if ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
@@ -1530,13 +1550,17 @@ static int keymap_handle_set(const char *name, size_t len, settings_read_cb read
 
         k_mutex_lock(&zmk_sensor_keymap_mutex, K_FOREVER);
         if (!zmk_sensor_direction_keymap_overrides[layer][sensor_idx]) {
-            int ret = init_sensor_direction_bindings_from_current(layer, sensor_idx);
+            // Direction settings are self-contained. Seed any missing sibling from the stock
+            // sensor binding so settings load does not depend on whether keymap/s or keymap/sd is
+            // visited first by the backend.
+            int ret = init_sensor_direction_bindings_from_stock(layer, sensor_idx);
             if (ret < 0) {
                 k_mutex_unlock(&zmk_sensor_keymap_mutex);
                 return ret;
             }
         }
         zmk_sensor_direction_keymap[layer][sensor_idx][param] = binding;
+        zmk_sensor_direction_loaded_settings[layer][sensor_idx] |= BIT(param);
         zmk_sensor_keymap[layer][sensor_idx] = sensor_direction_bindings_behavior();
         k_mutex_unlock(&zmk_sensor_keymap_mutex);
     }
@@ -1595,6 +1619,14 @@ static int keymap_handle_commit(void) {
                 }
             }
 #if ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
+            // Behavior local IDs may not be resolved while keymap/s and keymap/sd settings are
+            // visited. Defer this decision until commit so a temporarily NULL behavior_dev does
+            // not erase direction settings that were already restored.
+            if (!is_sensor_direction_bindings_behavior(binding->behavior_dev)) {
+                clear_sensor_direction_bindings(l, s);
+                continue;
+            }
+
             if (!zmk_sensor_direction_keymap_overrides[l][s]) {
                 continue;
             }
@@ -1619,6 +1651,50 @@ static int keymap_handle_commit(void) {
     }
     k_mutex_unlock(&zmk_sensor_keymap_mutex);
 #endif /* ZMK_KEYMAP_HAS_SENSORS */
+#endif
+
+#if ZMK_KEYMAP_HAS_SENSORS && ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
+    k_mutex_lock(&zmk_sensor_keymap_mutex, K_FOREVER);
+    for (int l = 0; l < ZMK_KEYMAP_LAYERS_LEN; l++) {
+        for (int s = 0; s < ZMK_KEYMAP_SENSORS_LEN; s++) {
+            if (!is_sensor_direction_bindings_behavior(zmk_sensor_keymap[l][s].behavior_dev)) {
+                continue;
+            }
+
+            if (!zmk_sensor_direction_keymap_overrides[l][s]) {
+                int ret = init_sensor_direction_bindings_from_current(l, s);
+                if (ret < 0) {
+                    LOG_ERR("Failed to restore sensor direction defaults at %d on layer %d (%d)",
+                            s, l, ret);
+                    continue;
+                }
+            }
+
+            for (int p = 0; p < ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT; p++) {
+                struct zmk_behavior_binding *binding =
+                    &zmk_sensor_direction_keymap[l][s][p];
+                bool was_loaded = zmk_sensor_direction_loaded_settings[l][s] & BIT(p);
+
+                if (was_loaded && binding->behavior_dev) {
+                    continue;
+                }
+
+                int ret = zmk_behavior_sensor_rotate_get_binding_param(
+                    &zmk_stock_sensor_keymap[l][s], (enum zmk_keymap_sensor_binding_param)p,
+                    binding);
+                if (ret < 0) {
+                    LOG_ERR("Failed to repair sensor binding param %d at %d on layer %d (%d)", p,
+                            s, l, ret);
+                    continue;
+                }
+
+                zmk_sensor_direction_pending_changes[l][s] |= BIT(p);
+                LOG_WRN("Repaired missing or invalid sensor binding param %d at %d on layer %d",
+                        p, s, l);
+            }
+        }
+    }
+    k_mutex_unlock(&zmk_sensor_keymap_mutex);
 #endif
 
     return 0;
