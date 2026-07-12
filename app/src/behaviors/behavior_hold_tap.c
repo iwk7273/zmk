@@ -143,14 +143,25 @@ struct last_tapped last_tapped = {INT32_MIN, INT32_MIN};
 
 static int resolve_tapping_term_ms(const struct behavior_hold_tap_config *config) {
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    uint16_t configured_tapping_term_ms = 0;
+
     switch (config->tapping_term_source) {
     case TAPPING_TERM_SOURCE_MOD_TAP:
-        return zmk_custom_config_mod_tap_tapping_term_ms();
+        configured_tapping_term_ms = zmk_custom_config_mod_tap_tapping_term_ms();
+        break;
     case TAPPING_TERM_SOURCE_LAYER_TAP:
-        return zmk_custom_config_layer_tap_tapping_term_ms();
+        configured_tapping_term_ms = zmk_custom_config_layer_tap_tapping_term_ms();
+        break;
     case TAPPING_TERM_SOURCE_STATIC:
     default:
         break;
+    }
+
+    /* Input devices can become active before settings_load() populates custom
+     * config. Zero is never a valid tapping term, so keep the devicetree value
+     * during that boot window instead of resolving the first press as a hold. */
+    if (configured_tapping_term_ms != 0) {
+        return configured_tapping_term_ms;
     }
 #endif
 
