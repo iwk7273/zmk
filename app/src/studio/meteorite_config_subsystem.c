@@ -25,8 +25,8 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 #include <zmk/keymap.h>
 #include <zmk/studio/rpc.h>
 
-#define METEORITE_CONFIG_SCHEMA_VERSION 3
-#define METEORITE_CONFIG_FEATURE_VERSION "1.2.0"
+#define METEORITE_CONFIG_SCHEMA_VERSION 4
+#define METEORITE_CONFIG_FEATURE_VERSION "1.3.0"
 
 #ifdef CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
 #define METEORITE_FIRMWARE_BUILD_VERSION CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
@@ -47,6 +47,8 @@ enum meteorite_option_kind {
     METEORITE_OPTIONS_ROTATION,
     METEORITE_OPTIONS_LAYERS,
     METEORITE_OPTIONS_OS_MODE,
+    METEORITE_OPTIONS_TIMEOUT,
+    METEORITE_OPTIONS_HOLD_TAP_FLAVOR,
 };
 
 enum meteorite_max_kind {
@@ -168,6 +170,102 @@ static const struct meteorite_field_desc meteorite_fields[] = {
         .step = 1,
         .options = METEORITE_OPTIONS_OS_MODE,
     },
+    {
+        .id = "mod_tap_flavor",
+        .label = "Mod-tap flavor",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .min = ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED,
+        .max = ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
+        .step = 1,
+        .options = METEORITE_OPTIONS_HOLD_TAP_FLAVOR,
+    },
+    {
+        .id = "mod_tap_tapping_term_ms",
+        .label = "Mod-tap tapping term",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "ms",
+        .min = ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
+        .max = ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS,
+        .step = ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS,
+    },
+    {
+        .id = "mod_tap_quick_tap_ms",
+        .label = "Mod-tap quick tap",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "ms",
+        .min = 0,
+        .max = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
+        .step = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS,
+        .options = METEORITE_OPTIONS_TIMEOUT,
+    },
+    {
+        .id = "mod_tap_require_prior_idle_ms",
+        .label = "Mod-tap require prior idle",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "ms",
+        .min = 0,
+        .max = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
+        .step = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS,
+        .options = METEORITE_OPTIONS_TIMEOUT,
+    },
+    {
+        .id = "layer_tap_flavor",
+        .label = "Layer-tap flavor",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .min = ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED,
+        .max = ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
+        .step = 1,
+        .options = METEORITE_OPTIONS_HOLD_TAP_FLAVOR,
+    },
+    {
+        .id = "layer_tap_tapping_term_ms",
+        .label = "Layer-tap tapping term",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "ms",
+        .min = ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
+        .max = ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS,
+        .step = ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS,
+    },
+    {
+        .id = "layer_tap_quick_tap_ms",
+        .label = "Layer-tap quick tap",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "ms",
+        .min = 0,
+        .max = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
+        .step = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS,
+        .options = METEORITE_OPTIONS_TIMEOUT,
+    },
+    {
+        .id = "layer_tap_require_prior_idle_ms",
+        .label = "Layer-tap require prior idle",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "ms",
+        .min = 0,
+        .max = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
+        .step = ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS,
+        .options = METEORITE_OPTIONS_TIMEOUT,
+    },
+    {
+        .id = "idle_timeout_s",
+        .label = "Idle timeout",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "s",
+        .min = 0,
+        .max = ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_MAX_S,
+        .step = ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_STEP_S,
+        .options = METEORITE_OPTIONS_TIMEOUT,
+    },
+    {
+        .id = "idle_sleep_timeout_s",
+        .label = "Deep sleep timeout",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_RANGE,
+        .unit = "s",
+        .min = 0,
+        .max = ZMK_CUSTOM_CONFIG_IDLE_SLEEP_TIMEOUT_MAX_S,
+        .step = ZMK_CUSTOM_CONFIG_IDLE_SLEEP_TIMEOUT_STEP_S,
+        .options = METEORITE_OPTIONS_TIMEOUT,
+    },
 };
 
 static bool encode_string(pb_ostream_t *stream, const pb_field_t *field, void *const *arg) {
@@ -288,6 +386,19 @@ static bool encode_field_options(pb_ostream_t *stream, const pb_field_t *field, 
     case METEORITE_OPTIONS_OS_MODE:
         return encode_option(stream, field, 0, "Windows", 0, "Windows") &&
                encode_option(stream, field, 1, "Mac", 1, "Mac");
+    case METEORITE_OPTIONS_TIMEOUT:
+        return encode_option(stream, field, 0, "Off", 0, "Off");
+    case METEORITE_OPTIONS_HOLD_TAP_FLAVOR:
+        return encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED,
+                             "Hold preferred", 0, "Hold preferred") &&
+               encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_BALANCED,
+                             "Balanced", 0, "Balanced") &&
+               encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_PREFERRED,
+                             "Tap preferred", 0, "Tap preferred") &&
+               encode_option(
+                   stream, field,
+                   ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
+                   "Tap unless interrupted", 0, "Tap unless interrupted");
     case METEORITE_OPTIONS_NONE:
     default:
         return true;
@@ -364,6 +475,23 @@ static void populate_ball_config(zmk_meteorite_BallConfig *ball,
     }
 }
 
+static void populate_timing_config(zmk_meteorite_TimingConfig *timing,
+                                   const struct zmk_custom_config *cfg) {
+    memset(timing, 0, sizeof(*timing));
+    timing->mod_tap_tapping_term_ms = cfg->mod_tap_tapping_term_ms;
+    timing->layer_tap_tapping_term_ms = cfg->layer_tap_tapping_term_ms;
+    timing->idle_timeout_s = cfg->idle_timeout_s;
+    timing->idle_sleep_timeout_s = cfg->idle_sleep_timeout_s;
+    timing->has_mod_tap = true;
+    timing->mod_tap.flavor = (zmk_meteorite_HoldTapFlavor)cfg->mod_tap_flavor;
+    timing->mod_tap.quick_tap_ms = cfg->mod_tap_quick_tap_ms;
+    timing->mod_tap.require_prior_idle_ms = cfg->mod_tap_require_prior_idle_ms;
+    timing->has_layer_tap = true;
+    timing->layer_tap.flavor = (zmk_meteorite_HoldTapFlavor)cfg->layer_tap_flavor;
+    timing->layer_tap.quick_tap_ms = cfg->layer_tap_quick_tap_ms;
+    timing->layer_tap.require_prior_idle_ms = cfg->layer_tap_require_prior_idle_ms;
+}
+
 static void populate_config_values(zmk_meteorite_ConfigValues *values,
                                    const struct zmk_custom_config *cfg) {
     memset(values, 0, sizeof(*values));
@@ -380,6 +508,8 @@ static void populate_config_values(zmk_meteorite_ConfigValues *values,
     values->os_mode = cfg->os_mode;
     values->has_ball_config = true;
     populate_ball_config(&values->ball_config, cfg);
+    values->has_timing_config = true;
+    populate_timing_config(&values->timing_config, cfg);
 }
 
 static void apply_ball_config(struct zmk_custom_config *cfg, const zmk_meteorite_BallConfig *ball) {
@@ -400,9 +530,29 @@ static void apply_ball_config(struct zmk_custom_config *cfg, const zmk_meteorite
     }
 }
 
+static void apply_timing_config(struct zmk_custom_config *cfg,
+                                const zmk_meteorite_TimingConfig *timing) {
+    cfg->mod_tap_tapping_term_ms = (uint16_t)timing->mod_tap_tapping_term_ms;
+    cfg->layer_tap_tapping_term_ms = (uint16_t)timing->layer_tap_tapping_term_ms;
+    cfg->idle_timeout_s = (uint16_t)timing->idle_timeout_s;
+    cfg->idle_sleep_timeout_s = (uint16_t)timing->idle_sleep_timeout_s;
+    if (timing->has_mod_tap) {
+        cfg->mod_tap_flavor = (uint8_t)timing->mod_tap.flavor;
+        cfg->mod_tap_quick_tap_ms = (uint16_t)timing->mod_tap.quick_tap_ms;
+        cfg->mod_tap_require_prior_idle_ms =
+            (uint16_t)timing->mod_tap.require_prior_idle_ms;
+    }
+    if (timing->has_layer_tap) {
+        cfg->layer_tap_flavor = (uint8_t)timing->layer_tap.flavor;
+        cfg->layer_tap_quick_tap_ms = (uint16_t)timing->layer_tap.quick_tap_ms;
+        cfg->layer_tap_require_prior_idle_ms =
+            (uint16_t)timing->layer_tap.require_prior_idle_ms;
+    }
+}
+
 static struct zmk_custom_config custom_config_from_values(const zmk_meteorite_ConfigValues *values) {
-    /* Start from the current state so fields absent from the request (notably
-     * ball_config sent by an older client) are preserved rather than cleared. */
+    /* Start from the current state so optional submessages omitted by older
+     * clients are preserved rather than cleared. */
     struct zmk_custom_config cfg = *zmk_custom_config_get();
 
     cfg.cpi_idx = values->cpi_idx;
@@ -418,6 +568,9 @@ static struct zmk_custom_config custom_config_from_values(const zmk_meteorite_Co
 
     if (values->has_ball_config) {
         apply_ball_config(&cfg, &values->ball_config);
+    }
+    if (values->has_timing_config) {
+        apply_timing_config(&cfg, &values->timing_config);
     }
 
     return cfg;
@@ -459,6 +612,56 @@ static bool ball_config_is_valid(const zmk_meteorite_BallConfig *ball) {
     return true;
 }
 
+static bool stepped_value_is_valid(uint32_t value, uint32_t min, uint32_t max, uint32_t step,
+                                   bool allow_disabled) {
+    if (allow_disabled && value == 0) {
+        return true;
+    }
+    return value >= min && value <= max && (value - min) % step == 0;
+}
+
+static bool hold_tap_config_is_valid(const zmk_meteorite_HoldTapConfig *hold_tap) {
+    int32_t flavor = (int32_t)hold_tap->flavor;
+    return flavor >= ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED &&
+           flavor <= ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED &&
+           stepped_value_is_valid(hold_tap->quick_tap_ms,
+                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MIN_MS,
+                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
+                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS, true) &&
+           stepped_value_is_valid(hold_tap->require_prior_idle_ms,
+                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MIN_MS,
+                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
+                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS, true);
+}
+
+static bool timing_config_is_valid(const zmk_meteorite_TimingConfig *timing) {
+    if (!stepped_value_is_valid(timing->mod_tap_tapping_term_ms,
+                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
+                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS,
+                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS, false) ||
+        !stepped_value_is_valid(timing->layer_tap_tapping_term_ms,
+                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
+                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS,
+                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS, false) ||
+        !stepped_value_is_valid(timing->idle_timeout_s, ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_MIN_S,
+                                ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_MAX_S,
+                                ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_STEP_S, true) ||
+        !stepped_value_is_valid(timing->idle_sleep_timeout_s,
+                                ZMK_CUSTOM_CONFIG_IDLE_SLEEP_TIMEOUT_MIN_S,
+                                ZMK_CUSTOM_CONFIG_IDLE_SLEEP_TIMEOUT_MAX_S,
+                                ZMK_CUSTOM_CONFIG_IDLE_SLEEP_TIMEOUT_STEP_S, true)) {
+        return false;
+    }
+
+    if ((timing->has_mod_tap && !hold_tap_config_is_valid(&timing->mod_tap)) ||
+        (timing->has_layer_tap && !hold_tap_config_is_valid(&timing->layer_tap))) {
+        return false;
+    }
+
+    return timing->idle_timeout_s == 0 || timing->idle_sleep_timeout_s == 0 ||
+           timing->idle_sleep_timeout_s >= timing->idle_timeout_s;
+}
+
 static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
     const struct zmk_custom_config *defaults = zmk_custom_config_defaults_get();
 
@@ -477,6 +680,9 @@ static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
     }
 
     if (values->has_ball_config && !ball_config_is_valid(&values->ball_config)) {
+        return false;
+    }
+    if (values->has_timing_config && !timing_config_is_valid(&values->timing_config)) {
         return false;
     }
 

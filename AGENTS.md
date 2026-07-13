@@ -5,7 +5,8 @@ upstream ZMK にない ZMK Studio RPC capability を追加し、Meteorite editor
 
 ## 作業方針
 
-- upstream ZMK との差分は最小に保ち、Meteorite 固有の変更は ZMK Studio RPC / settings / metadata の公開面に限定します。
+- upstream ZMK との差分は最小に保ち、Meteorite 固有の変更は ZMK Studio RPC / settings / metadata の公開面と、公開設定を runtime behavior / power management へ適用する最小限の hook に限定します。
+- runtime hook は custom config 無効時に upstream の挙動を維持し、settings 読み込み前は devicetree / Kconfig の値へフォールバックさせます。
 - upstream 由来の広範な refactor や unrelated formatting は避けてください。
 - `upstream` remote は `zmkfirmware/zmk` を指す追従元として維持し、Meteorite fork 側の feature branch へ差分を積みます。
 - 現行の Meteorite Studio 連携 branch は `feat/meteorite-custom-config-rpc` です。`zmk-config-meteorite40/config/west.yml` からこの branch を参照します。

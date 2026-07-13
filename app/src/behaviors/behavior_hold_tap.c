@@ -19,6 +19,10 @@
 #include <zmk/events/keycode_state_changed.h>
 #include <zmk/behavior.h>
 
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+#include <zmk/custom_feature.h>
+#endif
+
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
@@ -52,8 +56,27 @@ enum decision_moment {
     HT_QUICK_TAP,
 };
 
+enum tapping_term_source {
+    TAPPING_TERM_SOURCE_STATIC,
+    TAPPING_TERM_SOURCE_MOD_TAP,
+    TAPPING_TERM_SOURCE_LAYER_TAP,
+};
+
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+BUILD_ASSERT((int)FLAVOR_HOLD_PREFERRED ==
+                 (int)ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED &&
+                 (int)FLAVOR_BALANCED ==
+                     (int)ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_BALANCED &&
+                 (int)FLAVOR_TAP_PREFERRED ==
+                     (int)ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_PREFERRED &&
+                 (int)FLAVOR_TAP_UNLESS_INTERRUPTED ==
+                     (int)ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
+             "Meteorite and hold-tap flavor values must remain aligned");
+#endif
+
 struct behavior_hold_tap_config {
     int tapping_term_ms;
+    enum tapping_term_source tapping_term_source;
     char *hold_behavior_dev;
     char *tap_behavior_dev;
     int quick_tap_ms;
@@ -82,6 +105,10 @@ struct active_hold_tap {
     uint32_t param_hold;
     uint32_t param_tap;
     int64_t timestamp;
+    int tapping_term_ms;
+    int quick_tap_ms;
+    int require_prior_idle_ms;
+    enum flavor flavor;
     enum status status;
     const struct behavior_hold_tap_config *config;
     struct k_work_delayable work;
@@ -129,6 +156,83 @@ struct last_tapped {
 // int64 min since it will overflow if -1 is added
 struct last_tapped last_tapped = {INT32_MIN, INT32_MIN};
 
+static int resolve_tapping_term_ms(const struct behavior_hold_tap_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    if (!zmk_custom_config_is_ready()) {
+        return config->tapping_term_ms;
+    }
+
+    switch (config->tapping_term_source) {
+    case TAPPING_TERM_SOURCE_MOD_TAP:
+        return zmk_custom_config_mod_tap_tapping_term_ms();
+    case TAPPING_TERM_SOURCE_LAYER_TAP:
+        return zmk_custom_config_layer_tap_tapping_term_ms();
+    case TAPPING_TERM_SOURCE_STATIC:
+    default:
+        return config->tapping_term_ms;
+    }
+#endif
+
+    return config->tapping_term_ms;
+}
+
+static enum flavor resolve_flavor(const struct behavior_hold_tap_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    if (zmk_custom_config_is_ready()) {
+        switch (config->tapping_term_source) {
+        case TAPPING_TERM_SOURCE_MOD_TAP:
+            return (enum flavor)zmk_custom_config_mod_tap_flavor();
+        case TAPPING_TERM_SOURCE_LAYER_TAP:
+            return (enum flavor)zmk_custom_config_layer_tap_flavor();
+        case TAPPING_TERM_SOURCE_STATIC:
+        default:
+            break;
+        }
+    }
+#endif
+    return config->flavor;
+}
+
+static int resolve_quick_tap_ms(const struct behavior_hold_tap_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    if (zmk_custom_config_is_ready()) {
+        uint16_t value;
+        switch (config->tapping_term_source) {
+        case TAPPING_TERM_SOURCE_MOD_TAP:
+            value = zmk_custom_config_mod_tap_quick_tap_ms();
+            return value == 0 ? -1 : value;
+        case TAPPING_TERM_SOURCE_LAYER_TAP:
+            value = zmk_custom_config_layer_tap_quick_tap_ms();
+            return value == 0 ? -1 : value;
+        case TAPPING_TERM_SOURCE_STATIC:
+        default:
+            break;
+        }
+    }
+#endif
+    return config->quick_tap_ms;
+}
+
+static int resolve_require_prior_idle_ms(const struct behavior_hold_tap_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
+    if (zmk_custom_config_is_ready()) {
+        uint16_t value;
+        switch (config->tapping_term_source) {
+        case TAPPING_TERM_SOURCE_MOD_TAP:
+            value = zmk_custom_config_mod_tap_require_prior_idle_ms();
+            return value == 0 ? -1 : value;
+        case TAPPING_TERM_SOURCE_LAYER_TAP:
+            value = zmk_custom_config_layer_tap_require_prior_idle_ms();
+            return value == 0 ? -1 : value;
+        case TAPPING_TERM_SOURCE_STATIC:
+        default:
+            break;
+        }
+    }
+#endif
+    return config->require_prior_idle_ms;
+}
+
 static void store_last_tapped(int64_t timestamp) {
     if (timestamp > last_tapped.timestamp) {
         last_tapped.position = INT32_MIN;
@@ -142,11 +246,11 @@ static void store_last_hold_tapped(struct active_hold_tap *hold_tap) {
 }
 
 static bool is_quick_tap(struct active_hold_tap *hold_tap) {
-    if ((last_tapped.timestamp + hold_tap->config->require_prior_idle_ms) > hold_tap->timestamp) {
+    if ((last_tapped.timestamp + hold_tap->require_prior_idle_ms) > hold_tap->timestamp) {
         return true;
     } else {
         return (last_tapped.position == hold_tap->position) &&
-               (last_tapped.timestamp + hold_tap->config->quick_tap_ms) > hold_tap->timestamp;
+               (last_tapped.timestamp + hold_tap->quick_tap_ms) > hold_tap->timestamp;
     }
 }
 
@@ -268,6 +372,10 @@ static struct active_hold_tap *store_hold_tap(struct zmk_behavior_binding_event 
         active_hold_taps[i].param_hold = param_hold;
         active_hold_taps[i].param_tap = param_tap;
         active_hold_taps[i].timestamp = event->timestamp;
+        active_hold_taps[i].tapping_term_ms = resolve_tapping_term_ms(config);
+        active_hold_taps[i].quick_tap_ms = resolve_quick_tap_ms(config);
+        active_hold_taps[i].require_prior_idle_ms = resolve_require_prior_idle_ms(config);
+        active_hold_taps[i].flavor = resolve_flavor(config);
         active_hold_taps[i].position_of_first_other_key_pressed = -1;
         return &active_hold_taps[i];
     }
@@ -543,7 +651,7 @@ static void decide_hold_tap(struct active_hold_tap *hold_tap,
     }
 
     // If the hold-tap behavior is still undecided, attempt to decide it.
-    switch (hold_tap->config->flavor) {
+    switch (hold_tap->flavor) {
     case FLAVOR_HOLD_PREFERRED:
         decide_hold_preferred(hold_tap, decision_moment);
         break;
@@ -567,7 +675,7 @@ static void decide_hold_tap(struct active_hold_tap *hold_tap,
     // Since the hold-tap has been decided, clean up undecided_hold_tap and
     // execute the decided behavior.
     LOG_DBG("%d decided %s (%s decision moment %s)", hold_tap->position,
-            status_str(hold_tap->status), flavor_str(hold_tap->config->flavor),
+            status_str(hold_tap->status), flavor_str(hold_tap->flavor),
             decision_moment_str(decision_moment));
     undecided_hold_tap = NULL;
     press_binding(hold_tap);
@@ -634,7 +742,7 @@ static int on_hold_tap_binding_pressed(struct zmk_behavior_binding *binding,
 
     // if this behavior was queued we have to adjust the timer to only
     // wait for the remaining time.
-    int32_t tapping_term_ms_left = (hold_tap->timestamp + cfg->tapping_term_ms) - k_uptime_get();
+    int32_t tapping_term_ms_left = (hold_tap->timestamp + hold_tap->tapping_term_ms) - k_uptime_get();
     k_work_schedule(&hold_tap->work, K_MSEC(tapping_term_ms_left));
 
     return ZMK_BEHAVIOR_OPAQUE;
@@ -651,7 +759,7 @@ static int on_hold_tap_binding_released(struct zmk_behavior_binding *binding,
     // If these events were queued, the timer event may be queued too late or not at all.
     // We insert a timer event before the TH_KEY_UP event to verify.
     int work_cancel_result = k_work_cancel_delayable(&hold_tap->work);
-    if (event.timestamp > (hold_tap->timestamp + hold_tap->config->tapping_term_ms)) {
+    if (event.timestamp > (hold_tap->timestamp + hold_tap->tapping_term_ms)) {
         decide_hold_tap(hold_tap, HT_TIMER_EVENT);
     }
 
@@ -758,7 +866,7 @@ static int position_state_changed_listener(const zmk_event_t *eh) {
     // We make a timer decision before the other key events are handled if the timer would
     // have run out.
     if (ev->timestamp >
-        (undecided_hold_tap->timestamp + undecided_hold_tap->config->tapping_term_ms)) {
+        (undecided_hold_tap->timestamp + undecided_hold_tap->tapping_term_ms)) {
         decide_hold_tap(undecided_hold_tap, HT_TIMER_EVENT);
     }
 
@@ -860,6 +968,8 @@ static int behavior_hold_tap_init(const struct device *dev) {
 #define KP_INST(n)                                                                                 \
     static const struct behavior_hold_tap_config behavior_hold_tap_config_##n = {                  \
         .tapping_term_ms = DT_INST_PROP(n, tapping_term_ms),                                       \
+        .tapping_term_source =                                                                    \
+            DT_ENUM_IDX(DT_DRV_INST(n), meteorite_tapping_term_source),                           \
         .hold_behavior_dev = DEVICE_DT_NAME(DT_INST_PHANDLE_BY_IDX(n, bindings, 0)),               \
         .tap_behavior_dev = DEVICE_DT_NAME(DT_INST_PHANDLE_BY_IDX(n, bindings, 1)),                \
         .quick_tap_ms = DT_INST_PROP(n, quick_tap_ms),                                             \

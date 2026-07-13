@@ -16,6 +16,14 @@ properties:
   tapping_term_ms:
     type: int
     deprecated: true
+  meteorite-tapping-term-source:
+    type: string
+    description: Runtime tapping-term source for Meteorite custom config.
+    default: "static"
+    enum:
+      - "static"
+      - "mod-tap"
+      - "layer-tap"
   quick-tap-ms:
     type: int
     default: -1
