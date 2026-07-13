@@ -28,6 +28,7 @@
 #include <zmk/hid.h>
 #include <zmk/keymap.h>
 #include <zmk/matrix.h>
+#include <zmk/stdlib.h>
 #include <zmk/virtual_key_position.h>
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
@@ -778,18 +779,6 @@ static bool values_are_unique_u8(const uint8_t *values, uint8_t count) {
         }
     }
     return true;
-}
-
-static void sort_u8(uint8_t *values, uint8_t count) {
-    for (uint8_t i = 0; i < count; i++) {
-        for (uint8_t j = i + 1; j < count; j++) {
-            if (values[j] < values[i]) {
-                uint8_t tmp = values[i];
-                values[i] = values[j];
-                values[j] = tmp;
-            }
-        }
-    }
 }
 
 static void sort_i32(int32_t *values, uint8_t count) {

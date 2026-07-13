@@ -12,6 +12,7 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 
 #include <zmk/behavior.h>
 #include <zmk/combos.h>
+#include <zmk/stdlib.h>
 #include <zmk/studio/rpc.h>
 
 #include <pb_encode.h>
