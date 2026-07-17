@@ -24,8 +24,8 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 #include <zmk/keymap.h>
 #include <zmk/studio/rpc.h>
 
-#define METEORITE_CONFIG_SCHEMA_VERSION 4
-#define METEORITE_CONFIG_FEATURE_VERSION "1.3.0"
+#define METEORITE_CONFIG_SCHEMA_VERSION 5
+#define METEORITE_CONFIG_FEATURE_VERSION "1.4.0"
 
 #ifdef CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
 #define METEORITE_FIRMWARE_BUILD_VERSION CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
@@ -48,6 +48,7 @@ enum meteorite_option_kind {
     METEORITE_OPTIONS_OS_MODE,
     METEORITE_OPTIONS_TIMEOUT,
     METEORITE_OPTIONS_HOLD_TAP_FLAVOR,
+    METEORITE_OPTIONS_POINTER_PROFILE,
 };
 
 enum meteorite_max_kind {
@@ -128,6 +129,15 @@ static const struct meteorite_field_desc meteorite_fields[] = {
         .max = 1,
         .step = 1,
         .options = METEORITE_OPTIONS_TOGGLE,
+    },
+    {
+        .id = "pointer_profile",
+        .label = "Pointer profile",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .min = ZMK_POINTER_PROFILE_STANDARD,
+        .max = ZMK_POINTER_PROFILE_COUNT - 1,
+        .step = 1,
+        .options = METEORITE_OPTIONS_POINTER_PROFILE,
     },
     {
         .id = "scroll_scaling_mode",
@@ -398,6 +408,15 @@ static bool encode_field_options(pb_ostream_t *stream, const pb_field_t *field, 
                    stream, field,
                    ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
                    "Tap unless interrupted", 0, "Tap unless interrupted");
+    case METEORITE_OPTIONS_POINTER_PROFILE:
+        return encode_option(stream, field, ZMK_POINTER_PROFILE_STANDARD, "Standard",
+                             ZMK_POINTER_PROFILE_STANDARD, "Standard") &&
+               encode_option(stream, field, ZMK_POINTER_PROFILE_STABLE, "Stable",
+                             ZMK_POINTER_PROFILE_STABLE, "Stable") &&
+               encode_option(stream, field, ZMK_POINTER_PROFILE_RESPONSIVE, "Responsive",
+                             ZMK_POINTER_PROFILE_RESPONSIVE, "Responsive") &&
+               encode_option(stream, field, ZMK_POINTER_PROFILE_WIDE, "Wide",
+                             ZMK_POINTER_PROFILE_WIDE, "Wide");
     case METEORITE_OPTIONS_NONE:
     default:
         return true;
@@ -450,6 +469,19 @@ BUILD_ASSERT(ZMK_CUSTOM_CONFIG_MAX_LAYERS ==
 BUILD_ASSERT(ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS ==
                  ARRAY_SIZE(((zmk_meteorite_BallConfig *)0)->user1_bindings),
              "nanopb user1_bindings max_count must match ZMK_CUSTOM_CONFIG_BALL_DIRECTIONS");
+BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_STANDARD ==
+                 (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_STANDARD,
+             "pointer profile STANDARD must match the RPC schema");
+BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_STABLE ==
+                 (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_STABLE,
+             "pointer profile STABLE must match the RPC schema");
+BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_RESPONSIVE ==
+                 (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_RESPONSIVE,
+             "pointer profile RESPONSIVE must match the RPC schema");
+BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_WIDE ==
+                 (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_WIDE,
+             "pointer profile WIDE must match the RPC schema");
+BUILD_ASSERT(ZMK_POINTER_PROFILE_COUNT == 4, "pointer profile count must match the RPC schema");
 
 static void populate_ball_config(zmk_meteorite_BallConfig *ball,
                                  const struct zmk_custom_config *cfg) {
@@ -509,6 +541,8 @@ static void populate_config_values(zmk_meteorite_ConfigValues *values,
     populate_ball_config(&values->ball_config, cfg);
     values->has_timing_config = true;
     populate_timing_config(&values->timing_config, cfg);
+    values->has_pointer_config = true;
+    values->pointer_config.profile = (zmk_meteorite_PointerProfile)cfg->pointer_profile;
 }
 
 static void apply_ball_config(struct zmk_custom_config *cfg, const zmk_meteorite_BallConfig *ball) {
@@ -549,6 +583,11 @@ static void apply_timing_config(struct zmk_custom_config *cfg,
     }
 }
 
+static void apply_pointer_config(struct zmk_custom_config *cfg,
+                                 const zmk_meteorite_PointerConfig *pointer) {
+    cfg->pointer_profile = (uint8_t)pointer->profile;
+}
+
 static struct zmk_custom_config custom_config_from_values(const zmk_meteorite_ConfigValues *values) {
     /* Start from the current state so optional submessages omitted by older
      * clients are preserved rather than cleared. */
@@ -571,11 +610,19 @@ static struct zmk_custom_config custom_config_from_values(const zmk_meteorite_Co
     if (values->has_timing_config) {
         apply_timing_config(&cfg, &values->timing_config);
     }
+    if (values->has_pointer_config) {
+        apply_pointer_config(&cfg, &values->pointer_config);
+    }
 
     return cfg;
 }
 
 static bool bool_value_is_valid(uint32_t value) { return value <= 1; }
+
+static bool pointer_config_is_valid(const zmk_meteorite_PointerConfig *pointer) {
+    int32_t profile = (int32_t)pointer->profile;
+    return profile >= ZMK_POINTER_PROFILE_STANDARD && profile < ZMK_POINTER_PROFILE_COUNT;
+}
 
 static bool ball_config_is_valid(const zmk_meteorite_BallConfig *ball) {
     if (ball->layer_profiles_count > ZMK_CUSTOM_CONFIG_MAX_LAYERS) {
@@ -682,6 +729,9 @@ static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
         return false;
     }
     if (values->has_timing_config && !timing_config_is_valid(&values->timing_config)) {
+        return false;
+    }
+    if (values->has_pointer_config && !pointer_config_is_valid(&values->pointer_config)) {
         return false;
     }
 
