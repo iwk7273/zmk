@@ -4,46 +4,151 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <errno.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/types.h>
+
+#include <zephyr/bluetooth/gatt.h>
 #include <zephyr/device.h>
 #include <zephyr/init.h>
-#include <sys/types.h>
-#include <zephyr/sys/atomic.h>
 #include <zephyr/kernel.h>
-#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/ring_buffer.h>
+#include <zephyr/sys/util.h>
 
 #include <zmk/ble.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/ble_active_profile_changed.h>
 #include <zmk/studio/rpc.h>
-
 #include <zmk/studio/uuid.h>
 
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 
-static bool handling_rx = false;
+#define GATT_INDICATION_CONTEXT_COUNT 2
+#define GATT_TRANSIENT_RETRY_DELAY_MS 10
 
-static K_SEM_DEFINE(indicate_sem, 1, 1);
-static atomic_t notify_size;
+static atomic_t handling_rx;
+static atomic_t ccc_enabled;
+
+static K_MUTEX_DEFINE(gatt_session_control_mutex);
+static K_MUTEX_DEFINE(gatt_tx_mutex);
+static struct k_spinlock gatt_session_lock;
+static uint32_t gatt_session_generation;
+static bool gatt_session_active;
+static int gatt_session_error = -ENOTCONN;
+static struct bt_conn *gatt_session_conn;
+
+/* indicate_sem represents the one indication slot owned by the current
+ * session. stop/cancel never releases it; accepted indications release it only
+ * from their completion callback. */
+static K_SEM_DEFINE(indicate_sem, 0, 1);
+static K_SEM_DEFINE(tx_data_sem, 0, 1);
+static K_SEM_DEFINE(cancel_sem, 0, 1);
+
+static void gatt_start_session(void);
+static void gatt_stop_session(int error);
+
+static bool session_is_current(uint32_t generation) {
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+    bool current = gatt_session_active && gatt_session_generation == generation;
+    k_spin_unlock(&gatt_session_lock, key);
+    return current;
+}
+
+static uint32_t session_generation_get(void) {
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+    uint32_t generation = gatt_session_generation;
+    k_spin_unlock(&gatt_session_lock, key);
+    return generation;
+}
+
+static int session_status(uint32_t generation) {
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+    int status;
+
+    if (gatt_session_generation != generation) {
+        status = -ECANCELED;
+    } else if (!gatt_session_active) {
+        status = gatt_session_error;
+    } else {
+        status = 0;
+    }
+
+    k_spin_unlock(&gatt_session_lock, key);
+    return status;
+}
+
+static struct bt_conn *session_conn_ref(uint32_t generation) {
+    struct bt_conn *conn = NULL;
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+
+    if (gatt_session_active && gatt_session_generation == generation && gatt_session_conn) {
+        conn = bt_conn_ref(gatt_session_conn);
+    }
+
+    k_spin_unlock(&gatt_session_lock, key);
+    return conn;
+}
+
+static void fail_session(uint32_t generation, int error) {
+    bool failed = false;
+    struct bt_conn *session_conn = NULL;
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+
+    if (gatt_session_generation == generation && gatt_session_active) {
+        gatt_session_active = false;
+        gatt_session_error = error;
+        session_conn = gatt_session_conn;
+        gatt_session_conn = NULL;
+        failed = true;
+    }
+
+    k_spin_unlock(&gatt_session_lock, key);
+
+    if (failed) {
+        if (session_conn) {
+            bt_conn_unref(session_conn);
+        }
+        k_sem_give(&cancel_sem);
+        k_sem_give(&tx_data_sem);
+    }
+}
+
+static void release_unsubmitted_slot(uint32_t generation) {
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+
+    if (gatt_session_generation == generation && gatt_session_active) {
+        k_sem_give(&indicate_sem);
+    }
+
+    k_spin_unlock(&gatt_session_lock, key);
+}
 
 static void rpc_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value) {
     ARG_UNUSED(attr);
 
-    bool notif_enabled = (value == BT_GATT_CCC_INDICATE);
+    bool enabled = (value == BT_GATT_CCC_INDICATE);
+    atomic_set(&ccc_enabled, enabled);
 
-    LOG_INF("RPC Notifications %s", notif_enabled ? "enabled" : "disabled");
+    LOG_INF("RPC Notifications %s", enabled ? "enabled" : "disabled");
 
-    if (notif_enabled) {
+    if (enabled) {
         zmk_ble_studio_discovery_stop();
+        if (atomic_get(&handling_rx)) {
+            gatt_start_session();
+        }
+    } else {
+        gatt_stop_session(-EACCES);
     }
 
 #if CONFIG_ZMK_STUDIO_TRANSPORT_BLE_PREF_LATENCY < CONFIG_BT_PERIPHERAL_PREF_LATENCY
     struct bt_conn *conn = zmk_ble_active_profile_conn();
     if (conn) {
-        uint8_t latency = notif_enabled ? CONFIG_ZMK_STUDIO_TRANSPORT_BLE_PREF_LATENCY
-                                        : CONFIG_BT_PERIPHERAL_PREF_LATENCY;
+        uint8_t latency = enabled ? CONFIG_ZMK_STUDIO_TRANSPORT_BLE_PREF_LATENCY
+                                  : CONFIG_BT_PERIPHERAL_PREF_LATENCY;
 
         int ret = bt_conn_le_param_update(
             conn,
@@ -60,14 +165,13 @@ static void rpc_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 
 static ssize_t read_rpc_resp(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                              uint16_t len, uint16_t offset) {
-
     LOG_DBG("Read response for length %d at offset %d", len, offset);
     return 0;
 }
 
 static ssize_t write_rpc_req(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
                              uint16_t len, uint16_t offset, uint8_t flags) {
-    if (!handling_rx) {
+    if (!atomic_get(&handling_rx) || session_status(session_generation_get()) < 0) {
         return len;
     }
 
@@ -78,7 +182,7 @@ static ssize_t write_rpc_req(struct bt_conn *conn, const struct bt_gatt_attr *at
         uint32_t claim_len = ring_buf_put_claim(rpc_buf, &buffer, len - copied);
 
         if (claim_len > 0) {
-            memcpy(buffer, ((uint8_t *)buf) + copied, claim_len);
+            memcpy(buffer, ((const uint8_t *)buf) + copied, claim_len);
             copied += claim_len;
         }
 
@@ -86,17 +190,26 @@ static ssize_t write_rpc_req(struct bt_conn *conn, const struct bt_gatt_attr *at
     }
 
     zmk_rpc_rx_notify();
-
     return len;
 }
 
 BT_GATT_SERVICE_DEFINE(
     rpc_interface, BT_GATT_PRIMARY_SERVICE(BT_UUID_DECLARE_128(ZMK_STUDIO_BT_SERVICE_UUID)),
     BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(ZMK_STUDIO_BT_RPC_CHRC_UUID),
-                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP | BT_GATT_CHRC_READ | BT_GATT_CHRC_INDICATE,
+                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP |
+                               BT_GATT_CHRC_READ | BT_GATT_CHRC_INDICATE,
                            BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT, read_rpc_resp,
                            write_rpc_req, NULL),
     BT_GATT_CCC(rpc_ccc_cfg_changed, BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT));
+
+struct gatt_indication_context {
+    struct bt_gatt_indicate_params params;
+    uint32_t generation;
+    uint8_t data[CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE];
+};
+
+K_MEM_SLAB_DEFINE_STATIC(gatt_indication_slab, sizeof(struct gatt_indication_context),
+                         GATT_INDICATION_CONTEXT_COUNT, 4);
 
 static uint16_t get_notify_size_for_conn(struct bt_conn *conn) {
     uint16_t payload_size = 20;
@@ -104,243 +217,363 @@ static uint16_t get_notify_size_for_conn(struct bt_conn *conn) {
     if (!conn) {
         return MIN(payload_size, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
     }
+
     uint16_t mtu = bt_gatt_get_mtu(conn);
     if (mtu >= 23) {
         payload_size = mtu - 3;
-    } else {
-        /* bt_gatt_get_mtu returns 0 for a connection that isn't (yet) in the
-         * connected state; fall back to the minimum ATT payload instead of
-         * letting `mtu - 3` underflow. */
     }
+
     return MIN(payload_size, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 }
 
-static uint16_t current_notify_size(void) {
-    struct bt_conn *conn = zmk_ble_active_profile_conn();
+static uint16_t current_notify_size(uint32_t generation) {
+    struct bt_conn *conn = session_conn_ref(generation);
     uint16_t ns = get_notify_size_for_conn(conn);
 
     if (conn) {
         bt_conn_unref(conn);
     }
 
-    atomic_set(&notify_size, ns);
     return ns;
 }
 
-static void refresh_notify_size(void) {
-    (void)current_notify_size();
+static void gatt_start_session(void) {
+    struct bt_conn *conn = zmk_ble_active_profile_conn();
+    if (!conn) {
+        gatt_stop_session(-ENOTCONN);
+        return;
+    }
+
+    k_mutex_lock(&gatt_session_control_mutex, K_FOREVER);
+
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+    if (gatt_session_active && gatt_session_conn == conn) {
+        k_spin_unlock(&gatt_session_lock, key);
+        k_mutex_unlock(&gatt_session_control_mutex);
+        bt_conn_unref(conn);
+        return;
+    }
+
+    struct bt_conn *old_conn = gatt_session_conn;
+    gatt_session_conn = NULL;
+    gatt_session_generation++;
+    gatt_session_active = false;
+    gatt_session_error = -ECANCELED;
+    k_spin_unlock(&gatt_session_lock, key);
+
+    if (old_conn) {
+        bt_conn_unref(old_conn);
+    }
+
+    k_sem_give(&cancel_sem);
+    k_sem_give(&tx_data_sem);
+
+    /* A reconnect/CCC restart can keep BLE selected, so the RPC core does not
+     * necessarily run an endpoint switch. Synchronize with any active encoder
+     * and discard bytes belonging to the invalidated session here. */
+    zmk_rpc_reset_tx_buffer();
+
+    /* Wait only for the synchronous ring/submit critical section. An older
+     * accepted indication keeps its own params/data context until destroy. */
+    k_mutex_lock(&gatt_tx_mutex, K_FOREVER);
+    k_sem_reset(&indicate_sem);
+    k_sem_reset(&cancel_sem);
+    k_sem_reset(&tx_data_sem);
+
+    key = k_spin_lock(&gatt_session_lock);
+    gatt_session_active = true;
+    gatt_session_error = 0;
+    gatt_session_conn = conn;
+    uint32_t generation = gatt_session_generation;
+    k_sem_give(&indicate_sem);
+    k_spin_unlock(&gatt_session_lock, key);
+
+    LOG_DBG("GATT RPC session %u started", generation);
+    k_mutex_unlock(&gatt_tx_mutex);
+    k_mutex_unlock(&gatt_session_control_mutex);
 }
 
-static int gatt_start_rx() {
-    refresh_notify_size();
-    handling_rx = true;
+static void gatt_stop_session(int error) {
+    k_mutex_lock(&gatt_session_control_mutex, K_FOREVER);
+
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+    struct bt_conn *session_conn = gatt_session_conn;
+    gatt_session_conn = NULL;
+    gatt_session_generation++;
+    gatt_session_active = false;
+    gatt_session_error = error;
+    uint32_t generation = gatt_session_generation;
+    k_spin_unlock(&gatt_session_lock, key);
+
+    if (session_conn) {
+        bt_conn_unref(session_conn);
+    }
+
+    /* Cancellation wakes the TX worker without pretending an indication has
+     * completed. A late callback belongs to the old generation and is ignored. */
+    k_sem_give(&cancel_sem);
+    k_sem_give(&tx_data_sem);
+
+    k_mutex_lock(&gatt_tx_mutex, K_FOREVER);
+    k_mutex_unlock(&gatt_tx_mutex);
+    LOG_DBG("GATT RPC session %u stopped (%d)", generation, error);
+    k_mutex_unlock(&gatt_session_control_mutex);
+}
+
+static int gatt_start_rx(void) {
+    atomic_set(&handling_rx, 1);
+
+    if (atomic_get(&ccc_enabled)) {
+        gatt_start_session();
+    } else {
+        gatt_stop_session(-EACCES);
+    }
+
     return 0;
 }
 
 static int gatt_stop_rx(void) {
-    handling_rx = false;
+    atomic_clear(&handling_rx);
+    gatt_stop_session(-ECANCELED);
     return 0;
 }
 
-static uint8_t indicate_buffer[CONFIG_BT_L2CAP_TX_MTU - 3];
+static void indicate_destroy(struct bt_gatt_indicate_params *params) {
+    struct gatt_indication_context *context =
+        CONTAINER_OF(params, struct gatt_indication_context, params);
+    k_mem_slab_free(&gatt_indication_slab, context);
+}
 
-static void indicate_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *params, uint8_t err);
+static void indicate_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *params, uint8_t err) {
+    struct gatt_indication_context *context =
+        CONTAINER_OF(params, struct gatt_indication_context, params);
+    bool wake_tx = false;
+    bool failed = false;
+    struct bt_conn *session_conn = NULL;
 
-static struct bt_gatt_indicate_params rpc_indicate_params = {
-    .attr = &rpc_interface.attrs[1],
-    .data = indicate_buffer,
-    .func = indicate_cb,
-};
+    k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
+    if (gatt_session_generation == context->generation) {
+        k_sem_give(&indicate_sem);
+        if (err && gatt_session_active) {
+            gatt_session_active = false;
+            gatt_session_error = -EIO;
+            session_conn = gatt_session_conn;
+            gatt_session_conn = NULL;
+            failed = true;
+        } else if (!err && gatt_session_active) {
+            wake_tx = true;
+        }
+    }
+    k_spin_unlock(&gatt_session_lock, key);
 
-static void notif_rpc_tx_cb(struct k_work *work);
-static K_WORK_DEFINE(notify_tx_work, notif_rpc_tx_cb);
+    if (err) {
+        LOG_WRN("Indication callback error: %d", err);
+    }
+    if (failed) {
+        if (session_conn) {
+            bt_conn_unref(session_conn);
+        }
+        k_sem_give(&cancel_sem);
+    }
+    if (failed || wake_tx) {
+        k_sem_give(&tx_data_sem);
+    }
+}
 
-/*
- * Send a single indication carrying up to one MTU worth of bytes from tx_buf,
- * waiting for the previous indication to complete first. Used both from the
- * sync flush path (encoder context) and the work item (final drain).
- *
- * Returns 0 if an indication was queued or there was nothing to send, <0 on
- * error. The caller is responsible for managing the conn ref count.
- */
-static int gatt_send_one(struct bt_conn *conn, k_timeout_t sem_timeout) {
+static int wait_for_indication_slot(uint32_t generation) {
+    for (;;) {
+        struct k_poll_event events[] = {
+            K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE, K_POLL_MODE_NOTIFY_ONLY,
+                                     &indicate_sem),
+            K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE, K_POLL_MODE_NOTIFY_ONLY,
+                                     &cancel_sem),
+        };
+
+        int err = k_poll(events, ARRAY_SIZE(events),
+                         K_MSEC(CONFIG_ZMK_STUDIO_TRANSPORT_BLE_INDICATE_TIMEOUT_MS));
+        if (err < 0) {
+            return err == -EAGAIN ? -ETIMEDOUT : err;
+        }
+
+        if (events[1].state == K_POLL_STATE_SEM_AVAILABLE) {
+            k_sem_take(&cancel_sem, K_NO_WAIT);
+            int status = session_status(generation);
+            if (status < 0) {
+                return status;
+            }
+            continue;
+        }
+
+        if (events[0].state == K_POLL_STATE_SEM_AVAILABLE &&
+            k_sem_take(&indicate_sem, K_NO_WAIT) == 0) {
+            int status = session_status(generation);
+            if (status < 0) {
+                return status;
+            }
+            return 0;
+        }
+    }
+}
+
+/* Peek a chunk and remove it only after bt_gatt_indicate() has accepted the
+ * operation. The context remains owned by Zephyr until indicate_destroy(). */
+static int gatt_send_one(struct bt_conn *conn, uint32_t generation) {
     struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
     if (ring_buf_size_get(tx_buf) == 0) {
         return 0;
     }
 
-    int ret = k_sem_take(&indicate_sem, sem_timeout);
-    if (ret < 0) {
-        return ret;
-    }
-
-    uint16_t notify_size = MIN(get_notify_size_for_conn(conn), sizeof(indicate_buffer));
-    uint16_t added = 0;
-    while (added < notify_size && ring_buf_size_get(tx_buf) > 0) {
-        uint8_t *buf;
-        int len = ring_buf_get_claim(tx_buf, &buf, notify_size - added);
-
-        memcpy(indicate_buffer + added, buf, len);
-
-        added += len;
-        ring_buf_get_finish(tx_buf, len);
-    }
-
-    if (added == 0) {
-        /* The other consumer (work item vs. sync flush) drained the buffer
-         * while we waited for the semaphore; don't waste an indication round
-         * trip on an empty payload. */
-        k_sem_give(&indicate_sem);
-        return 0;
-    }
-
-    rpc_indicate_params.len = added;
-
-    int err = bt_gatt_indicate(conn, &rpc_indicate_params);
+    int err = wait_for_indication_slot(generation);
     if (err < 0) {
-        LOG_ERR("Failed to send indication (%d)", err);
-        k_sem_give(&indicate_sem);
         return err;
     }
 
-    /* indicate_cb will release indicate_sem after ACK */
+    struct gatt_indication_context *context;
+    err = k_mem_slab_alloc(&gatt_indication_slab, (void **)&context, K_NO_WAIT);
+    if (err < 0) {
+        release_unsubmitted_slot(generation);
+        return -ENOMEM;
+    }
+
+    memset(context, 0, sizeof(*context));
+    context->generation = generation;
+
+    k_mutex_lock(&gatt_tx_mutex, K_FOREVER);
+
+    if (!session_is_current(generation)) {
+        err = session_status(generation);
+        goto unsubmitted;
+    }
+
+    uint16_t chunk_size = MIN(get_notify_size_for_conn(conn), sizeof(context->data));
+    uint16_t added = ring_buf_peek(tx_buf, context->data, chunk_size);
+    if (added == 0) {
+        err = 0;
+        goto unsubmitted;
+    }
+
+    context->params.attr = &rpc_interface.attrs[1];
+    context->params.data = context->data;
+    context->params.len = added;
+    context->params.func = indicate_cb;
+    context->params.destroy = indicate_destroy;
+
+    err = bt_gatt_indicate(conn, &context->params);
+    if (err < 0) {
+        goto unsubmitted;
+    }
+
+    uint32_t consumed = ring_buf_get(tx_buf, NULL, added);
+    if (consumed != added) {
+        LOG_ERR("GATT RPC TX ring consume mismatch (%u/%u)", consumed, added);
+    }
+
+    k_mutex_unlock(&gatt_tx_mutex);
     return 0;
-}
 
-static void notif_rpc_tx_cb(struct k_work *work) {
-    /* Only ever touched from this handler (single system workqueue thread). */
-    static int consecutive_failures;
-
-    struct bt_conn *conn = zmk_ble_active_profile_conn();
-    struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
-
-    if (!conn) {
-        LOG_WRN("No active connection for queued data, dropping");
-        ring_buf_reset(tx_buf);
-        consecutive_failures = 0;
-        return;
-    }
-
-    int err = gatt_send_one(conn, K_NO_WAIT);
-    if (err == -EBUSY || err == -EAGAIN) {
-        /* prior indication still in-flight; indicate_cb will resubmit us */
-        consecutive_failures = 0;
-    } else if (err < 0) {
-        /* A half-dead link can keep failing the indicate while the conn object
-         * still resolves; bound the immediate retries so this work item doesn't
-         * spin on the system workqueue until the conn finally drops. */
-        if (++consecutive_failures < 5) {
-            LOG_ERR("Failed to drain tx_buf (%d), retrying", err);
-            k_work_submit(&notify_tx_work);
-        } else {
-            LOG_ERR("Failed to drain tx_buf (%d) %d times in a row, dropping pending TX", err,
-                    consecutive_failures);
-            ring_buf_reset(tx_buf);
-            consecutive_failures = 0;
-        }
-    } else {
-        consecutive_failures = 0;
-    }
-
-    bt_conn_unref(conn);
-}
-
-struct gatt_write_state {
-    size_t pending_notify;
-};
-
-static void indicate_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *params, uint8_t err) {
-    if (err) {
-        LOG_WRN("Indication callback error: %d", err);
-    }
-    k_sem_give(&indicate_sem);
-    k_work_submit(&notify_tx_work);
-}
-
-/*
- * Synchronously drain the tx_buf one indication at a time until tx_buf has room
- * for the encoder to make progress, or we hit an error / timeout.
- *
- * Called from gatt_tx_notify in encoder context when the ring_buf is filling up
- * faster than the work item can drain it. By waiting here for the indication
- * ACK we keep the ring_buf small enough that the encoder doesn't block on
- * rpc_tx_buffer_write claim failures, which lets us use the same modest TX_BUF
- * size on USB and BLE builds.
- */
-static int gatt_sync_flush(void) {
-    struct bt_conn *conn = zmk_ble_active_profile_conn();
-    if (!conn) {
-        struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
-        ring_buf_reset(tx_buf);
-        return -ENOTCONN;
-    }
-
-    int err = gatt_send_one(conn, K_MSEC(200));
-    bt_conn_unref(conn);
-    if (err == -EAGAIN || err == -EBUSY) {
-        /* Prior indication never ACKed within the window — link likely stalled.
-         * Drop the pending response so we don't loop forever in tx_notify.
-         */
-        struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
-        ring_buf_reset(tx_buf);
-        LOG_ERR("gatt_sync_flush: indicate_sem timed out, dropping pending TX");
-    }
+unsubmitted:
+    k_mutex_unlock(&gatt_tx_mutex);
+    k_mem_slab_free(&gatt_indication_slab, context);
+    release_unsubmitted_slot(generation);
     return err;
 }
 
-static void gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done, void *user_data) {
-    struct gatt_write_state *state = (struct gatt_write_state *)user_data;
+static bool is_transient_send_error(int error) { return error == -ENOMEM || error == -EAGAIN; }
 
-    state->pending_notify += added;
+static void gatt_tx_main(void *, void *, void *) {
+    struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
 
-    uint16_t ns = current_notify_size();
+    for (;;) {
+        k_sem_take(&tx_data_sem, K_FOREVER);
 
-    if (added == 0 && ring_buf_size_get(tx_buf) > 0) {
-        /* Encoder is stalled waiting for tx_buf room — drain in our context. */
-        gatt_sync_flush();
-        state->pending_notify = 0;
-        return;
-    }
+        uint32_t generation = session_generation_get();
+        uint8_t retries = 0;
 
-    if (msg_done) {
-        /* End of message: hand the remainder to the work item so this call
-         * returns quickly and the encoder can finish.
-         */
-        k_work_submit(&notify_tx_work);
-        state->pending_notify = 0;
-        return;
-    }
+        while (session_is_current(generation) && ring_buf_size_get(tx_buf) > 0) {
+            struct bt_conn *conn = session_conn_ref(generation);
+            if (!conn) {
+                fail_session(generation, -ENOTCONN);
+                break;
+            }
 
-    if (state->pending_notify >= ns) {
-        /* Got at least one indication worth of fresh bytes; drain now so the
-         * ring_buf doesn't fill up and stall the encoder.
-         */
-        gatt_sync_flush();
-        state->pending_notify = 0;
+            int err = gatt_send_one(conn, generation);
+            bt_conn_unref(conn);
+
+            if (err == 0) {
+                retries = 0;
+                continue;
+            }
+
+            if (err == -ECANCELED || !session_is_current(generation)) {
+                break;
+            }
+
+            if (is_transient_send_error(err) &&
+                retries < CONFIG_ZMK_STUDIO_TRANSPORT_BLE_TRANSIENT_RETRY_COUNT) {
+                retries++;
+                LOG_WRN("GATT RPC TX transient retry %u after error %d", retries, err);
+                k_sleep(K_MSEC(GATT_TRANSIENT_RETRY_DELAY_MS));
+                continue;
+            }
+
+            LOG_ERR("GATT RPC TX session failed (%d)", err);
+            fail_session(generation, err);
+            break;
+        }
     }
 }
 
-static struct gatt_write_state tx_state = {};
+K_THREAD_DEFINE(gatt_rpc_tx_thread, CONFIG_ZMK_STUDIO_TRANSPORT_BLE_TX_STACK_SIZE, gatt_tx_main,
+                NULL, NULL, NULL, CONFIG_ZMK_STUDIO_TRANSPORT_BLE_TX_PRIORITY, 0, 0);
 
-static void *gatt_tx_user_data(void) {
-    memset(&tx_state, 0, sizeof(tx_state));
+static void *gatt_tx_user_data(void) { return (void *)(uintptr_t)session_generation_get(); }
 
-    return &tx_state;
+static int gatt_tx_notify(struct ring_buf *tx_buf, size_t added, bool msg_done, void *user_data) {
+    ARG_UNUSED(added);
+
+    uint32_t generation = (uint32_t)(uintptr_t)user_data;
+    int status = session_status(generation);
+    if (status < 0) {
+        return status;
+    }
+
+    uint16_t ns = current_notify_size(generation);
+    if (msg_done || ring_buf_space_get(tx_buf) == 0 || ring_buf_size_get(tx_buf) >= ns) {
+        k_sem_give(&tx_data_sem);
+    }
+
+    return 0;
+}
+
+static void gatt_tx_abort(struct ring_buf *tx_buf) {
+    k_mutex_lock(&gatt_tx_mutex, K_FOREVER);
+    ring_buf_reset(tx_buf);
+    k_mutex_unlock(&gatt_tx_mutex);
 }
 
 ZMK_RPC_TRANSPORT(gatt, ZMK_TRANSPORT_BLE, gatt_start_rx, gatt_stop_rx, gatt_tx_user_data,
-                  gatt_tx_notify);
+                  gatt_tx_notify, gatt_tx_abort);
 
 static int gatt_rpc_listener(const zmk_event_t *eh) {
-    refresh_notify_size();
+    ARG_UNUSED(eh);
+
+    struct bt_conn *conn = zmk_ble_active_profile_conn();
+    bool connected = conn != NULL;
+    if (conn) {
+        bt_conn_unref(conn);
+    }
+
+    if (atomic_get(&handling_rx)) {
+        if (connected && atomic_get(&ccc_enabled)) {
+            gatt_start_session();
+        } else {
+            gatt_stop_session(-ENOTCONN);
+        }
+    }
 
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_LOCK_ON_DISCONNECT)
-    struct bt_conn *conn = zmk_ble_active_profile_conn();
-
-    if (!conn) {
+    if (!connected) {
         zmk_studio_core_lock();
-    } else {
-        bt_conn_unref(conn);
     }
 #endif
 

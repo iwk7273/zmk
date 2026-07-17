@@ -75,15 +75,25 @@ static zmk_studio_Response handle_request(const zmk_studio_Request *req) {
 RING_BUF_DECLARE(rpc_rx_buf, CONFIG_ZMK_STUDIO_RPC_RX_BUF_SIZE);
 
 static K_SEM_DEFINE(rpc_rx_sem, 0, 1);
+static K_SEM_DEFINE(rpc_work_sem, 0, 1);
 
 static enum studio_framing_state rpc_framing_state;
 
 static K_MUTEX_DEFINE(rpc_transport_mutex);
+static K_MUTEX_DEFINE(rpc_transport_switch_mutex);
+static K_MUTEX_DEFINE(rpc_tx_mutex);
 static struct zmk_rpc_transport *selected_transport;
+static uint32_t selected_transport_generation;
+
+K_MSGQ_DEFINE(rpc_notification_msgq, sizeof(zmk_studio_Notification),
+              CONFIG_ZMK_STUDIO_RPC_NOTIFICATION_QUEUE_SIZE, 4);
 
 struct ring_buf *zmk_rpc_get_rx_buf(void) { return &rpc_rx_buf; }
 
-void zmk_rpc_rx_notify(void) { k_sem_give(&rpc_rx_sem); }
+void zmk_rpc_rx_notify(void) {
+    k_sem_give(&rpc_rx_sem);
+    k_sem_give(&rpc_work_sem);
+}
 
 static bool rpc_read_cb(pb_istream_t *stream, uint8_t *buf, size_t count) {
     uint32_t write_offset = 0;
@@ -122,17 +132,87 @@ RING_BUF_DECLARE(rpc_tx_buf, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 
 struct ring_buf *zmk_rpc_get_tx_buf(void) { return &rpc_tx_buf; }
 
-#define RPC_TX_BUFFER_WAIT_TIMEOUT_MS 20
+void zmk_rpc_reset_tx_buffer(void) {
+    k_mutex_lock(&rpc_tx_mutex, K_FOREVER);
+
+    k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
+    struct zmk_rpc_transport *transport = selected_transport;
+    k_mutex_unlock(&rpc_transport_mutex);
+
+    if (transport && transport->tx_abort) {
+        transport->tx_abort(&rpc_tx_buf);
+    } else {
+        ring_buf_reset(&rpc_tx_buf);
+    }
+
+    k_mutex_unlock(&rpc_tx_mutex);
+}
 
 struct rpc_tx_stream_state {
+    struct zmk_rpc_transport *transport;
+    uint32_t transport_generation;
     void *user_data;
-    bool timed_out;
+    int error;
 };
+
+static bool rpc_tx_notify(struct rpc_tx_stream_state *tx_state, size_t added, bool message_done) {
+    k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
+
+    if (selected_transport != tx_state->transport ||
+        selected_transport_generation != tx_state->transport_generation) {
+        k_mutex_unlock(&rpc_transport_mutex);
+        tx_state->error = -ECANCELED;
+        return false;
+    }
+
+    int err = tx_state->transport->tx_notify(&rpc_tx_buf, added, message_done, tx_state->user_data);
+    k_mutex_unlock(&rpc_transport_mutex);
+
+    if (err < 0) {
+        tx_state->error = err;
+        return false;
+    }
+
+    return true;
+}
+
+static bool rpc_tx_wait_for_space(struct rpc_tx_stream_state *tx_state) {
+    int64_t timeout_at = k_uptime_get() + CONFIG_ZMK_STUDIO_RPC_TX_TIMEOUT_MS;
+
+    while (ring_buf_space_get(&rpc_tx_buf) == 0) {
+        if (!rpc_tx_notify(tx_state, 0, false)) {
+            return false;
+        }
+
+        if (ring_buf_space_get(&rpc_tx_buf) > 0) {
+            return true;
+        }
+
+        if (k_uptime_get() >= timeout_at) {
+            tx_state->error = -ETIMEDOUT;
+            return false;
+        }
+
+        k_sleep(K_MSEC(1));
+    }
+
+    return true;
+}
+
+static bool rpc_tx_write_framing_byte(struct rpc_tx_stream_state *tx_state, uint8_t byte,
+                                      bool message_done) {
+    while (ring_buf_put(&rpc_tx_buf, &byte, 1) != 1) {
+        if (!rpc_tx_wait_for_space(tx_state)) {
+            return false;
+        }
+    }
+
+    return rpc_tx_notify(tx_state, 1, message_done);
+}
 
 static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t count) {
     struct rpc_tx_stream_state *tx_state = stream->state;
     size_t written = 0;
-    int64_t timeout_at = k_uptime_get() + RPC_TX_BUFFER_WAIT_TIMEOUT_MS;
 
     bool escape_byte_already_written = false;
     do {
@@ -142,15 +222,11 @@ static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t
         uint32_t claim_len = ring_buf_put_claim(&rpc_tx_buf, &write_buf, count - written);
 
         if (claim_len == 0) {
-            selected_transport->tx_notify(&rpc_tx_buf, 0, false, tx_state->user_data);
-            if (k_uptime_get() >= timeout_at) {
-                tx_state->timed_out = true;
+            if (!rpc_tx_wait_for_space(tx_state)) {
                 return false;
             }
-            k_sleep(K_MSEC(1));
             continue;
         }
-        timeout_at = k_uptime_get() + RPC_TX_BUFFER_WAIT_TIMEOUT_MS;
 
         int escapes_written = 0;
         for (int i = 0; i < claim_len && write_idx < claim_len; i++) {
@@ -183,7 +259,9 @@ static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t
 
         written += (write_idx - escapes_written);
 
-        selected_transport->tx_notify(&rpc_tx_buf, write_idx, false, tx_state->user_data);
+        if (!rpc_tx_notify(tx_state, write_idx, false)) {
+            return false;
+        }
     } while (written < count);
 
     return true;
@@ -194,78 +272,115 @@ static pb_ostream_t pb_ostream_for_tx_buf(struct rpc_tx_stream_state *tx_state) 
     return stream;
 }
 
-static K_MUTEX_DEFINE(notification_response_mutex);
 static zmk_studio_Response notification_response;
 
 static int send_response(const zmk_studio_Response *resp) {
     int ret = 0;
 
+    k_mutex_lock(&rpc_tx_mutex, K_FOREVER);
+
+    struct rpc_tx_stream_state tx_state = {0};
+
     k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
 
     if (!selected_transport) {
+        k_mutex_unlock(&rpc_transport_mutex);
         goto exit;
     }
 
-    void *user_data = selected_transport->tx_user_data ? selected_transport->tx_user_data() : NULL;
+    tx_state.transport = selected_transport;
+    tx_state.transport_generation = selected_transport_generation;
+    tx_state.user_data =
+        selected_transport->tx_user_data ? selected_transport->tx_user_data() : NULL;
+    k_mutex_unlock(&rpc_transport_mutex);
 
-    struct rpc_tx_stream_state tx_state = {.user_data = user_data};
     pb_ostream_t stream = pb_ostream_for_tx_buf(&tx_state);
 
-    uint8_t framing_byte = FRAMING_SOF;
-    if (ring_buf_put(&rpc_tx_buf, &framing_byte, 1) != 1) {
-        ret = -ENOSPC;
-        goto reset_exit;
+    if (!rpc_tx_write_framing_byte(&tx_state, FRAMING_SOF, false)) {
+        ret = tx_state.error ? tx_state.error : -ENOSPC;
+        goto abort_exit;
     }
-
-    selected_transport->tx_notify(&rpc_tx_buf, 1, false, user_data);
 
     /* Now we are ready to encode the message! */
     bool status = pb_encode(&stream, &zmk_studio_Response_msg, resp);
 
     if (!status) {
-        if (tx_state.timed_out) {
-            ret = -ENOSPC;
-            goto reset_exit;
+        if (tx_state.error) {
+            ret = tx_state.error;
+            goto abort_exit;
         }
 #if !IS_ENABLED(CONFIG_NANOPB_NO_ERRMSG)
         LOG_ERR("Failed to encode the message %s", stream.errmsg);
 #endif // !IS_ENABLED(CONFIG_NANOPB_NO_ERRMSG)
         ret = -EINVAL;
-        goto reset_exit;
+        goto abort_exit;
     }
 
-    framing_byte = FRAMING_EOF;
-    if (ring_buf_put(&rpc_tx_buf, &framing_byte, 1) != 1) {
-        ret = -ENOSPC;
-        goto reset_exit;
+    if (!rpc_tx_write_framing_byte(&tx_state, FRAMING_EOF, true)) {
+        ret = tx_state.error ? tx_state.error : -ENOSPC;
+        goto abort_exit;
     }
-
-    selected_transport->tx_notify(&rpc_tx_buf, 1, true, user_data);
     goto exit;
 
-reset_exit:
-    ring_buf_reset(&rpc_tx_buf);
+abort_exit:
+    /* Discard only the unsent remainder. A transport error must not tear down
+     * the shared BLE connection (which also carries HID reports). Receivers
+     * resynchronize on the next unescaped SOF if part of this frame was already
+     * transmitted. */
+    if (tx_state.transport && tx_state.transport->tx_abort) {
+        tx_state.transport->tx_abort(&rpc_tx_buf);
+    } else {
+        ring_buf_reset(&rpc_tx_buf);
+    }
 
 exit:
-    k_mutex_unlock(&rpc_transport_mutex);
+    k_mutex_unlock(&rpc_tx_mutex);
     return ret;
 }
 
 int zmk_rpc_send_notification(const zmk_studio_Notification *notification) {
-    k_mutex_lock(&notification_response_mutex, K_FOREVER);
+    int ret = k_msgq_put(&rpc_notification_msgq, notification, K_NO_WAIT);
+    if (ret < 0) {
+        LOG_WRN("Dropping RPC notification: outbound queue is full");
+        return ret;
+    }
 
-    memset(&notification_response, 0, sizeof(notification_response));
-    notification_response.which_type = zmk_studio_Response_notification_tag;
-    notification_response.type.notification = *notification;
-
-    int ret = send_response(&notification_response);
-    k_mutex_unlock(&notification_response_mutex);
-
-    return ret;
+    k_sem_give(&rpc_work_sem);
+    return 0;
 }
 
 static void rpc_main(void) {
+    bool notification_pending = false;
+
     for (;;) {
+        /* Requests always win over queued notifications. In particular, any
+         * notification raised synchronously by a request handler is not sent
+         * until that request's response has been encoded. */
+        if (ring_buf_size_get(&rpc_rx_buf) == 0) {
+            if (!notification_pending) {
+                memset(&notification_response, 0, sizeof(notification_response));
+                if (k_msgq_get(&rpc_notification_msgq, &notification_response.type.notification,
+                               K_NO_WAIT) == 0) {
+                    notification_response.which_type = zmk_studio_Response_notification_tag;
+                    notification_pending = true;
+                }
+            }
+
+            if (ring_buf_size_get(&rpc_rx_buf) == 0 && notification_pending) {
+                int err = send_response(&notification_response);
+                notification_pending = false;
+                if (err < 0) {
+                    LOG_ERR("Failed to send the RPC notification %d", err);
+                }
+                continue;
+            }
+
+            if (ring_buf_size_get(&rpc_rx_buf) == 0) {
+                k_sem_take(&rpc_work_sem, K_FOREVER);
+                continue;
+            }
+        }
+
         pb_istream_t stream = pb_istream_for_rx_ring_buf();
         zmk_studio_Request req = zmk_studio_Request_init_zero;
 #if IS_ENABLED(CONFIG_THREAD_ANALYZER)
@@ -296,18 +411,39 @@ K_THREAD_DEFINE(studio_rpc_thread, CONFIG_ZMK_STUDIO_RPC_THREAD_STACK_SIZE, rpc_
 
 static void refresh_selected_transport(void) {
     enum zmk_transport transport = zmk_endpoint_get_selected().transport;
+    struct zmk_rpc_transport *old_transport;
+    struct zmk_rpc_transport *new_transport = NULL;
+
+    k_mutex_lock(&rpc_transport_switch_mutex, K_FOREVER);
 
     k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
 
     if (selected_transport && selected_transport->transport == transport) {
+        k_mutex_unlock(&rpc_transport_mutex);
         goto exit_refresh;
     }
 
-    if (selected_transport) {
-        if (selected_transport->rx_stop) {
-            selected_transport->rx_stop();
-        }
-        selected_transport = NULL;
+    old_transport = selected_transport;
+    selected_transport = NULL;
+    selected_transport_generation++;
+    k_mutex_unlock(&rpc_transport_mutex);
+
+    /* Invalidate the selected transport before waiting for an encoder. Its
+     * next non-blocking notify observes the generation change and exits, so a
+     * transport switch cannot wait behind transport backpressure. */
+    if (old_transport && old_transport->rx_stop) {
+        old_transport->rx_stop();
+    }
+
+    k_mutex_lock(&rpc_tx_mutex, K_FOREVER);
+
+    if (old_transport && old_transport->tx_abort) {
+        old_transport->tx_abort(&rpc_tx_buf);
+    } else {
+        ring_buf_reset(&rpc_tx_buf);
+    }
+
+    if (old_transport) {
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_LOCK_ON_DISCONNECT)
         zmk_studio_core_lock();
 #endif
@@ -315,20 +451,33 @@ static void refresh_selected_transport(void) {
 
     STRUCT_SECTION_FOREACH(zmk_rpc_transport, t) {
         if (t->transport == transport) {
-            selected_transport = t;
-            if (selected_transport->rx_start) {
-                selected_transport->rx_start();
-            }
+            new_transport = t;
             break;
         }
     }
 
-    if (!selected_transport) {
+    int err = 0;
+    if (new_transport && new_transport->rx_start) {
+        err = new_transport->rx_start();
+    }
+
+    if (err >= 0) {
+        k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
+        selected_transport = new_transport;
+        selected_transport_generation++;
+        k_mutex_unlock(&rpc_transport_mutex);
+    } else {
+        LOG_ERR("Failed to start RPC transport (%d)", err);
+    }
+
+    if (!new_transport) {
         LOG_WRN("Failed to select a transport!");
     }
 
+    k_mutex_unlock(&rpc_tx_mutex);
+
 exit_refresh:
-    k_mutex_unlock(&rpc_transport_mutex);
+    k_mutex_unlock(&rpc_transport_switch_mutex);
 }
 
 static int zmk_rpc_init(void) {

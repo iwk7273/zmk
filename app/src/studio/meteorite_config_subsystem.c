@@ -13,7 +13,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
@@ -831,42 +830,14 @@ static void send_unsaved_changes_status_changed_notification(bool dirty) {
     k_mutex_unlock(&meteorite_notification_mutex);
 }
 
-enum meteorite_notification_pending_bits {
-    METEORITE_NOTIFICATION_PENDING_CONFIG_STATE = BIT(0),
-    METEORITE_NOTIFICATION_PENDING_UNSAVED_STATUS = BIT(1),
-};
-
-static atomic_t meteorite_notification_pending;
-
-static void meteorite_notification_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
-
-    for (;;) {
-        atomic_val_t pending = atomic_set(&meteorite_notification_pending, 0);
-        if (pending == 0) {
-            return;
-        }
-
-        if ((pending & METEORITE_NOTIFICATION_PENDING_CONFIG_STATE) != 0) {
-            send_config_state_changed_notification();
-        }
-
-        if ((pending & METEORITE_NOTIFICATION_PENDING_UNSAVED_STATUS) != 0) {
-            send_unsaved_changes_status_changed_notification(
-                zmk_custom_config_check_unsaved_changes());
-        }
-    }
-}
-
-static K_WORK_DEFINE(meteorite_notification_work, meteorite_notification_work_handler);
-
 void zmk_custom_config_changed(const struct zmk_custom_config *cfg) {
     ARG_UNUSED(cfg);
 
-    atomic_or(&meteorite_notification_pending,
-              METEORITE_NOTIFICATION_PENDING_CONFIG_STATE |
-                  METEORITE_NOTIFICATION_PENDING_UNSAVED_STATUS);
-    k_work_submit(&meteorite_notification_work);
+    /* zmk_rpc_send_notification() copies into the RPC core's bounded outbound
+     * queue and never waits for BLE backpressure. The existing RPC thread sends
+     * both notifications after the request response. */
+    send_config_state_changed_notification();
+    send_unsaved_changes_status_changed_notification(zmk_custom_config_check_unsaved_changes());
 }
 
 ZMK_RPC_SUBSYSTEM_HANDLER(meteorite, get_config_state, ZMK_STUDIO_RPC_HANDLER_SECURED);
