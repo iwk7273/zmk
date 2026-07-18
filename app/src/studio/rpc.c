@@ -424,16 +424,23 @@ static void refresh_selected_transport(void) {
     }
 
     old_transport = selected_transport;
-    selected_transport = NULL;
-    selected_transport_generation++;
     k_mutex_unlock(&rpc_transport_mutex);
 
-    /* Invalidate the selected transport before waiting for an encoder. Its
-     * next non-blocking notify observes the generation change and exits, so a
-     * transport switch cannot wait behind transport backpressure. */
+    /* Stop the old transport while it is still selected. In particular, the
+     * BLE stop path first invalidates its session and waits for its TX critical
+     * section, so a concurrent session restart cannot reset this shared ring
+     * without the transport-specific synchronization. */
     if (old_transport && old_transport->rx_stop) {
         old_transport->rx_stop();
     }
+
+    /* Now invalidate the core selection. An encoder still targeting the old
+     * generation observes the change on its next notify and aborts instead of
+     * continuing on the replacement transport. */
+    k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
+    selected_transport = NULL;
+    selected_transport_generation++;
+    k_mutex_unlock(&rpc_transport_mutex);
 
     k_mutex_lock(&rpc_tx_mutex, K_FOREVER);
 
@@ -442,6 +449,12 @@ static void refresh_selected_transport(void) {
     } else {
         ring_buf_reset(&rpc_tx_buf);
     }
+
+    /* rx_start may establish a BLE session, which resets the TX ring through
+     * zmk_rpc_reset_tx_buffer(). Keep the core selection invalid, but release
+     * rpc_tx_mutex before starting the replacement transport so the transport
+     * and core locks are always acquired in the same order. */
+    k_mutex_unlock(&rpc_tx_mutex);
 
     if (old_transport) {
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_LOCK_ON_DISCONNECT)
@@ -473,8 +486,6 @@ static void refresh_selected_transport(void) {
     if (!new_transport) {
         LOG_WRN("Failed to select a transport!");
     }
-
-    k_mutex_unlock(&rpc_tx_mutex);
 
 exit_refresh:
     k_mutex_unlock(&rpc_transport_switch_mutex);

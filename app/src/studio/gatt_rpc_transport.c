@@ -246,6 +246,16 @@ static void gatt_start_session(void) {
 
     k_mutex_lock(&gatt_session_control_mutex, K_FOREVER);
 
+    /* The CCC/profile callback may have observed handling_rx just before an
+     * endpoint switch stopped this transport. Recheck both gates after taking
+     * the session-control mutex so that delayed callbacks cannot restart an
+     * orphaned BLE RPC session. */
+    if (!atomic_get(&handling_rx) || !atomic_get(&ccc_enabled)) {
+        k_mutex_unlock(&gatt_session_control_mutex);
+        bt_conn_unref(conn);
+        return;
+    }
+
     k_spinlock_key_t key = k_spin_lock(&gatt_session_lock);
     if (gatt_session_active && gatt_session_conn == conn) {
         k_spin_unlock(&gatt_session_lock, key);
