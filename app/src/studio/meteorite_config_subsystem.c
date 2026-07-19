@@ -24,8 +24,8 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 #include <zmk/keymap.h>
 #include <zmk/studio/rpc.h>
 
-#define METEORITE_CONFIG_SCHEMA_VERSION 5
-#define METEORITE_CONFIG_FEATURE_VERSION "1.4.0"
+#define METEORITE_CONFIG_SCHEMA_VERSION 6
+#define METEORITE_CONFIG_FEATURE_VERSION "1.5.0"
 
 #ifdef CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
 #define METEORITE_FIRMWARE_BUILD_VERSION CONFIG_ZMK_METEORITE_FIRMWARE_BUILD_VERSION
@@ -49,6 +49,10 @@ enum meteorite_option_kind {
     METEORITE_OPTIONS_TIMEOUT,
     METEORITE_OPTIONS_HOLD_TAP_FLAVOR,
     METEORITE_OPTIONS_POINTER_PROFILE,
+    METEORITE_OPTIONS_POINTER_GAIN_START,
+    METEORITE_OPTIONS_POINTER_GAIN_PRECISION,
+    METEORITE_OPTIONS_POINTER_GAIN_FAST,
+    METEORITE_OPTIONS_POINTER_GAIN_FLICK,
 };
 
 enum meteorite_max_kind {
@@ -131,13 +135,53 @@ static const struct meteorite_field_desc meteorite_fields[] = {
         .options = METEORITE_OPTIONS_TOGGLE,
     },
     {
-        .id = "pointer_profile",
+        .id = "pointer_profile_v2",
         .label = "Pointer profile",
         .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
         .min = ZMK_POINTER_PROFILE_STANDARD,
         .max = ZMK_POINTER_PROFILE_COUNT - 1,
         .step = 1,
         .options = METEORITE_OPTIONS_POINTER_PROFILE,
+    },
+    {
+        .id = "pointer_gain_start",
+        .label = "Start gain",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .unit = "x",
+        .min = 30,
+        .max = 60,
+        .step = 1,
+        .options = METEORITE_OPTIONS_POINTER_GAIN_START,
+    },
+    {
+        .id = "pointer_gain_precision",
+        .label = "Precision gain",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .unit = "x",
+        .min = 60,
+        .max = 140,
+        .step = 1,
+        .options = METEORITE_OPTIONS_POINTER_GAIN_PRECISION,
+    },
+    {
+        .id = "pointer_gain_fast",
+        .label = "Fast gain",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .unit = "x",
+        .min = 130,
+        .max = 300,
+        .step = 1,
+        .options = METEORITE_OPTIONS_POINTER_GAIN_FAST,
+    },
+    {
+        .id = "pointer_gain_flick",
+        .label = "Flick gain",
+        .kind = zmk_meteorite_ConfigFieldKind_CONFIG_FIELD_KIND_ENUM,
+        .unit = "x",
+        .min = 170,
+        .max = 420,
+        .step = 1,
+        .options = METEORITE_OPTIONS_POINTER_GAIN_FLICK,
     },
     {
         .id = "scroll_scaling_mode",
@@ -415,8 +459,24 @@ static bool encode_field_options(pb_ostream_t *stream, const pb_field_t *field, 
                              ZMK_POINTER_PROFILE_STABLE, "Stable") &&
                encode_option(stream, field, ZMK_POINTER_PROFILE_RESPONSIVE, "Responsive",
                              ZMK_POINTER_PROFILE_RESPONSIVE, "Responsive") &&
-               encode_option(stream, field, ZMK_POINTER_PROFILE_WIDE, "Wide",
-                             ZMK_POINTER_PROFILE_WIDE, "Wide");
+               encode_option(stream, field, ZMK_POINTER_PROFILE_CUSTOM, "Custom",
+                             ZMK_POINTER_PROFILE_CUSTOM, "Custom");
+    case METEORITE_OPTIONS_POINTER_GAIN_START:
+    case METEORITE_OPTIONS_POINTER_GAIN_PRECISION:
+    case METEORITE_OPTIONS_POINTER_GAIN_FAST:
+    case METEORITE_OPTIONS_POINTER_GAIN_FLICK: {
+        uint8_t point = (uint8_t)(desc->options - METEORITE_OPTIONS_POINTER_GAIN_START);
+        for (uint8_t option = 0; option < zmk_custom_config_pointer_gain_option_count(point);
+             option++) {
+            uint16_t gain = zmk_custom_config_pointer_gain_option_at(point, option);
+            char label[16];
+            snprintf(label, sizeof(label), "%u.%ux", gain / 100, (gain % 100) / 10);
+            if (!encode_option(stream, field, gain, label, gain, label)) {
+                return false;
+            }
+        }
+        return true;
+    }
     case METEORITE_OPTIONS_NONE:
     default:
         return true;
@@ -478,9 +538,9 @@ BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_STABLE ==
 BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_RESPONSIVE ==
                  (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_RESPONSIVE,
              "pointer profile RESPONSIVE must match the RPC schema");
-BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_WIDE ==
-                 (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_WIDE,
-             "pointer profile WIDE must match the RPC schema");
+BUILD_ASSERT((int32_t)ZMK_POINTER_PROFILE_CUSTOM ==
+                 (int32_t)zmk_meteorite_PointerProfile_POINTER_PROFILE_CUSTOM,
+             "pointer profile CUSTOM must match the RPC schema");
 BUILD_ASSERT(ZMK_POINTER_PROFILE_COUNT == 4, "pointer profile count must match the RPC schema");
 
 static void populate_ball_config(zmk_meteorite_BallConfig *ball,
@@ -543,6 +603,15 @@ static void populate_config_values(zmk_meteorite_ConfigValues *values,
     populate_timing_config(&values->timing_config, cfg);
     values->has_pointer_config = true;
     values->pointer_config.profile = (zmk_meteorite_PointerProfile)cfg->pointer_profile;
+    values->pointer_config.has_custom_curve = true;
+    values->pointer_config.custom_curve.start_gain_percent =
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_START];
+    values->pointer_config.custom_curve.precision_gain_percent =
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_PRECISION];
+    values->pointer_config.custom_curve.fast_gain_percent =
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_FAST];
+    values->pointer_config.custom_curve.flick_gain_percent =
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_FLICK];
 }
 
 static void apply_ball_config(struct zmk_custom_config *cfg, const zmk_meteorite_BallConfig *ball) {
@@ -586,6 +655,16 @@ static void apply_timing_config(struct zmk_custom_config *cfg,
 static void apply_pointer_config(struct zmk_custom_config *cfg,
                                  const zmk_meteorite_PointerConfig *pointer) {
     cfg->pointer_profile = (uint8_t)pointer->profile;
+    if (pointer->has_custom_curve) {
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_START] =
+            (uint16_t)pointer->custom_curve.start_gain_percent;
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_PRECISION] =
+            (uint16_t)pointer->custom_curve.precision_gain_percent;
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_FAST] =
+            (uint16_t)pointer->custom_curve.fast_gain_percent;
+        cfg->pointer_custom_gain_percent[ZMK_POINTER_CURVE_POINT_FLICK] =
+            (uint16_t)pointer->custom_curve.flick_gain_percent;
+    }
 }
 
 static struct zmk_custom_config custom_config_from_values(const zmk_meteorite_ConfigValues *values) {
@@ -621,7 +700,22 @@ static bool bool_value_is_valid(uint32_t value) { return value <= 1; }
 
 static bool pointer_config_is_valid(const zmk_meteorite_PointerConfig *pointer) {
     int32_t profile = (int32_t)pointer->profile;
-    return profile >= ZMK_POINTER_PROFILE_STANDARD && profile < ZMK_POINTER_PROFILE_COUNT;
+    if (profile < ZMK_POINTER_PROFILE_STANDARD || profile >= ZMK_POINTER_PROFILE_COUNT) {
+        return false;
+    }
+    if (!pointer->has_custom_curve) {
+        return true;
+    }
+    if (pointer->custom_curve.start_gain_percent > UINT16_MAX ||
+        pointer->custom_curve.precision_gain_percent > UINT16_MAX ||
+        pointer->custom_curve.fast_gain_percent > UINT16_MAX ||
+        pointer->custom_curve.flick_gain_percent > UINT16_MAX) {
+        return false;
+    }
+
+    struct zmk_custom_config candidate = *zmk_custom_config_get();
+    apply_pointer_config(&candidate, pointer);
+    return zmk_custom_config_pointer_curve_is_valid(&candidate);
 }
 
 static bool ball_config_is_valid(const zmk_meteorite_BallConfig *ball) {
