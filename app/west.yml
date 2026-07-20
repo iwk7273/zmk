@@ -41,7 +41,7 @@ manifest:
       path: modules/lib/gui/lvgl
       remote: zmkfirmware
     - name: zmk-studio-messages
-      revision: d30e8c5806d9ee3f57ab38be8ded053b9b995126
+      revision: 07a6524a23b6b89e7139e77bfb6d6bf1ab23ca13
       path: modules/msgs/zmk-studio-messages
       remote: meteorite
   group-filter: [+optional]
