@@ -98,6 +98,32 @@ config ZMK_STUDIO_TRANSPORT_BLE_PREF_LATENCY
       When the studio UI is connected, a lower latency can be requested in order
       to make the interactions between keyboard and studio faster.
 
+config ZMK_STUDIO_TRANSPORT_BLE_TX_STACK_SIZE
+    int "BLE TX thread stack size"
+    default 1024
+
+config ZMK_STUDIO_TRANSPORT_BLE_TX_PRIORITY
+    int "BLE TX thread priority"
+    default 9
+
+config ZMK_STUDIO_TRANSPORT_BLE_INDICATE_TIMEOUT_MS
+    int "BLE indication completion timeout in milliseconds"
+    default 5000
+    range 100 30000
+    help
+      Maximum time the BLE TX worker waits for an accepted indication to
+      complete. Transport cancellation uses a separate signal and does not
+      release the in-flight indication slot.
+
+config ZMK_STUDIO_TRANSPORT_BLE_TRANSIENT_RETRY_COUNT
+    int "BLE transient send retry count"
+    default 10
+    range 0 20
+    help
+      Number of retries for transient -ENOMEM and -EAGAIN indication errors.
+      Permanent subscription, permission, and connection errors fail the
+      current BLE RPC session immediately.
+
 endif
 
 endmenu
@@ -105,6 +131,23 @@ endmenu
 config ZMK_STUDIO_RPC_THREAD_STACK_SIZE
     int "RPC Thread Stack Size"
     default 4096
+
+config ZMK_STUDIO_RPC_NOTIFICATION_QUEUE_SIZE
+    int "RPC outbound notification queue depth"
+    default 2
+    range 1 8
+    help
+      Number of notifications that can be deferred while a request and its
+      response are processed. Notifications are sent by the existing RPC
+      thread after pending request responses.
+
+config ZMK_STUDIO_RPC_TX_TIMEOUT_MS
+    int "RPC TX backpressure timeout in milliseconds"
+    default 5000
+    range 100 30000
+    help
+      Maximum time an RPC encoder waits for a transport to make room in the TX
+      ring. The transport-selection mutex is not held during this wait.
 
 config ZMK_STUDIO_RPC_RX_BUF_SIZE
     int "RX Buffer Size"

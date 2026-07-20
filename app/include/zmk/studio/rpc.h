@@ -198,15 +198,17 @@ struct zmk_rpc_event_mapper {
 
 typedef int (*zmk_rpc_rx_start_stop_func)(void);
 
-typedef void (*zmk_rpc_tx_buffer_notify_func)(struct ring_buf *buf, size_t added, bool message_done,
-                                              void *user_data);
+typedef int (*zmk_rpc_tx_buffer_notify_func)(struct ring_buf *buf, size_t added, bool message_done,
+                                             void *user_data);
 typedef void *(*zmk_rpc_tx_user_data_func)(void);
+typedef void (*zmk_rpc_tx_abort_func)(struct ring_buf *buf);
 
 struct zmk_rpc_transport {
     enum zmk_transport transport;
 
     zmk_rpc_tx_user_data_func tx_user_data;
     zmk_rpc_tx_buffer_notify_func tx_notify;
+    zmk_rpc_tx_abort_func tx_abort;
     zmk_rpc_rx_start_stop_func rx_start;
     zmk_rpc_rx_start_stop_func rx_stop;
 };
@@ -217,14 +219,18 @@ zmk_studio_Response zmk_rpc_subsystem_delegate_to_subs(const struct zmk_rpc_subs
 
 struct ring_buf *zmk_rpc_get_tx_buf(void);
 struct ring_buf *zmk_rpc_get_rx_buf(void);
+/** Cancel any active encoder/consumer work and discard the shared TX ring. */
+void zmk_rpc_reset_tx_buffer(void);
 void zmk_rpc_rx_notify(void);
 int zmk_rpc_send_notification(const zmk_studio_Notification *notification);
 
-#define ZMK_RPC_TRANSPORT(name, _transport, _rx_start, _rx_stop, _tx_user_data, _tx_notify)        \
+#define ZMK_RPC_TRANSPORT(name, _transport, _rx_start, _rx_stop, _tx_user_data, _tx_notify,        \
+                          _tx_abort)                                                               \
     STRUCT_SECTION_ITERABLE(zmk_rpc_transport, name) = {                                           \
         .transport = _transport,                                                                   \
         .rx_start = _rx_start,                                                                     \
         .rx_stop = _rx_stop,                                                                       \
         .tx_user_data = _tx_user_data,                                                             \
         .tx_notify = _tx_notify,                                                                   \
+        .tx_abort = _tx_abort,                                                                     \
     }

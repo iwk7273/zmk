@@ -20,8 +20,7 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 
 static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
 
-static void tx_notify(struct ring_buf *tx_ring_buf, size_t written, bool msg_done,
-                      void *user_data) {
+static int tx_notify(struct ring_buf *tx_ring_buf, size_t written, bool msg_done, void *user_data) {
     if (msg_done || (ring_buf_size_get(tx_ring_buf) > (ring_buf_capacity_get(tx_ring_buf) / 2))) {
 #if IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)
         uart_irq_tx_enable(uart_dev);
@@ -38,6 +37,15 @@ static void tx_notify(struct ring_buf *tx_ring_buf, size_t written, bool msg_don
         }
 #endif
     }
+
+    return 0;
+}
+
+static void tx_abort(struct ring_buf *tx_ring_buf) {
+#if IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)
+    uart_irq_tx_disable(uart_dev);
+#endif
+    ring_buf_reset(tx_ring_buf);
 }
 
 #if !IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)
@@ -87,7 +95,7 @@ static int stop_rx(void) {
     return 0;
 }
 
-ZMK_RPC_TRANSPORT(uart, ZMK_TRANSPORT_USB, start_rx, stop_rx, NULL, tx_notify);
+ZMK_RPC_TRANSPORT(uart, ZMK_TRANSPORT_USB, start_rx, stop_rx, NULL, tx_notify, tx_abort);
 
 #if IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)
 
