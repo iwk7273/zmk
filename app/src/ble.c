@@ -37,6 +37,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/event_manager.h>
 #include <zmk/events/ble_active_profile_changed.h>
 
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+#include <zmk/pointing/resolution_multipliers.h>
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
 #include <zmk/studio/uuid.h>
 #endif
@@ -566,6 +570,24 @@ static bool is_conn_active_profile(const struct bt_conn *conn) {
     return bt_addr_le_cmp(bt_conn_get_dst(conn), &profiles[active_profile].peer) == 0;
 }
 
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+static void reset_conn_resolution_multipliers(const struct bt_conn *conn) {
+    int profile = zmk_ble_profile_index(bt_conn_get_dst(conn));
+
+    if (profile < 0) {
+        if (!zmk_ble_active_profile_is_open()) {
+            LOG_WRN("Unable to reset resolution multiplier for unknown BLE profile");
+            return;
+        }
+        profile = zmk_ble_active_profile_index();
+    }
+
+    zmk_pointing_resolution_multipliers_reset_profile(
+        (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_BLE,
+                                       .ble = {.profile_index = profile}});
+}
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+
 static void connected(struct bt_conn *conn, uint8_t err) {
     char addr[BT_ADDR_LE_STR_LEN];
     struct bt_conn_info info;
@@ -588,6 +610,10 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     }
 
     LOG_DBG("Connected %s", addr);
+
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+    reset_conn_resolution_multipliers(conn);
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
     update_advertising();
 

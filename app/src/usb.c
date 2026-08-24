@@ -17,6 +17,10 @@
 
 #include <zmk/usb_hid.h>
 
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+#include <zmk/pointing/resolution_multipliers.h>
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static enum usb_dc_status_code usb_status = USB_DC_UNKNOWN;
@@ -60,6 +64,13 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *params) {
     if (status == USB_DC_SOF) {
         return;
     }
+
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+    if (status == USB_DC_RESET || status == USB_DC_DISCONNECTED) {
+        zmk_pointing_resolution_multipliers_reset_profile(
+            (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_USB});
+    }
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
 #if IS_ENABLED(CONFIG_ZMK_USB_BOOT)
     if (status == USB_DC_RESET) {
