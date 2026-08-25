@@ -297,6 +297,15 @@ int zmk_ble_studio_discovery_stop(void) {
 #endif /* CONFIG_ZMK_STUDIO_TRANSPORT_BLE */
 
 static void clear_profile_bond(uint8_t profile) {
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+    /* Keep the host-selected multiplier across ordinary reconnects because a
+     * bonded host may not rewrite a cached Feature Report on every BLE link.
+     * A cleared profile must always return to the legacy-safe multiplier. */
+    zmk_pointing_resolution_multipliers_reset_profile(
+        (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_BLE,
+                                       .ble = {.profile_index = profile}});
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+
     if (bt_addr_le_cmp(&profiles[profile].peer, BT_ADDR_LE_ANY)) {
         bt_unpair(BT_ID_DEFAULT, &profiles[profile].peer);
         set_profile_address(profile, BT_ADDR_LE_ANY);
@@ -570,24 +579,6 @@ static bool is_conn_active_profile(const struct bt_conn *conn) {
     return bt_addr_le_cmp(bt_conn_get_dst(conn), &profiles[active_profile].peer) == 0;
 }
 
-#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
-static void reset_conn_resolution_multipliers(const struct bt_conn *conn) {
-    int profile = zmk_ble_profile_index(bt_conn_get_dst(conn));
-
-    if (profile < 0) {
-        if (!zmk_ble_active_profile_is_open()) {
-            LOG_WRN("Unable to reset resolution multiplier for unknown BLE profile");
-            return;
-        }
-        profile = zmk_ble_active_profile_index();
-    }
-
-    zmk_pointing_resolution_multipliers_reset_profile(
-        (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_BLE,
-                                       .ble = {.profile_index = profile}});
-}
-#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
-
 static void connected(struct bt_conn *conn, uint8_t err) {
     char addr[BT_ADDR_LE_STR_LEN];
     struct bt_conn_info info;
@@ -610,10 +601,6 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     }
 
     LOG_DBG("Connected %s", addr);
-
-#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
-    reset_conn_resolution_multipliers(conn);
-#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
     update_advertising();
 

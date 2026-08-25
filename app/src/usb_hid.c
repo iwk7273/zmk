@@ -67,7 +67,9 @@ static int get_report_cb(const struct device *dev, struct usb_setup_packet *setu
         switch (setup->wValue & HID_GET_REPORT_ID_MASK) {
 #if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
         case ZMK_HID_REPORT_ID_MOUSE:
-            static struct zmk_hid_mouse_resolution_feature_report res_feature_report;
+            static struct zmk_hid_mouse_resolution_feature_report res_feature_report = {
+                .report_id = ZMK_HID_REPORT_ID_MOUSE,
+            };
 
             struct zmk_endpoint_instance endpoint = {
                 .transport = ZMK_TRANSPORT_USB,
