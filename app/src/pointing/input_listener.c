@@ -91,6 +91,10 @@ struct input_listener_data {
 #if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
     int16_t wheel_remainder;
     int16_t h_wheel_remainder;
+    uint8_t wheel_multiplier;
+    uint8_t h_wheel_multiplier;
+    uint8_t resolution_endpoint_index;
+    uint32_t resolution_generation;
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
     struct input_listener_processor_data base_processor_data;
@@ -249,25 +253,54 @@ static void clear_xy_data(struct input_listener_xy_data *data) {
 #if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 static void apply_resolution_scaling(struct input_listener_data *data, struct input_event *evt) {
     int16_t *remainder;
-    uint8_t div;
+    uint8_t *last_multiplier;
+    uint8_t resolution_value;
+    struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
+    uint8_t endpoint_index = zmk_endpoint_instance_to_index(endpoint);
+    uint32_t generation =
+        zmk_pointing_resolution_multipliers_get_profile_generation(endpoint);
+    struct zmk_pointing_resolution_multipliers profile =
+        zmk_pointing_resolution_multipliers_get_profile(endpoint);
+
+    if (data->resolution_endpoint_index != endpoint_index ||
+        data->resolution_generation != generation) {
+        data->wheel_remainder = 0;
+        data->h_wheel_remainder = 0;
+        data->wheel_multiplier = 0;
+        data->h_wheel_multiplier = 0;
+        data->resolution_endpoint_index = endpoint_index;
+        data->resolution_generation = generation;
+    }
 
     switch (evt->code) {
     case INPUT_REL_WHEEL:
         remainder = &data->wheel_remainder;
-        div = (16 - zmk_pointing_resolution_multipliers_get_current_profile().wheel);
+        last_multiplier = &data->wheel_multiplier;
+        resolution_value = profile.wheel;
         break;
     case INPUT_REL_HWHEEL:
         remainder = &data->h_wheel_remainder;
-        div = (16 - zmk_pointing_resolution_multipliers_get_current_profile().hor_wheel);
+        last_multiplier = &data->h_wheel_multiplier;
+        resolution_value = profile.hor_wheel;
         break;
     default:
         return;
     }
 
-    int16_t val = evt->value + *remainder;
-    int16_t scaled = val / (int16_t)div;
-    *remainder = val - (scaled * (int16_t)div);
-    evt->value = val;
+    uint8_t multiplier =
+        MIN((uint16_t)resolution_value + 1U, ZMK_POINTING_RESOLUTION_MULTIPLIER_MAX);
+    if (*last_multiplier != multiplier) {
+        *remainder = 0;
+        *last_multiplier = multiplier;
+    }
+
+    /* Input processors produce units at the descriptor's maximum resolution.
+     * Scale them to the resolution requested by the current host. */
+    int32_t accumulated = (int32_t)evt->value * multiplier + (int32_t)*remainder;
+    int16_t scaled = accumulated / ZMK_POINTING_RESOLUTION_MULTIPLIER_MAX;
+    *remainder = accumulated -
+                 ((int32_t)scaled * ZMK_POINTING_RESOLUTION_MULTIPLIER_MAX);
+    evt->value = scaled;
 }
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 

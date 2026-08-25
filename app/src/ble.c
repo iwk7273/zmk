@@ -37,6 +37,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/event_manager.h>
 #include <zmk/events/ble_active_profile_changed.h>
 
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+#include <zmk/pointing/resolution_multipliers.h>
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
 #include <zmk/studio/uuid.h>
 #endif
@@ -293,6 +297,15 @@ int zmk_ble_studio_discovery_stop(void) {
 #endif /* CONFIG_ZMK_STUDIO_TRANSPORT_BLE */
 
 static void clear_profile_bond(uint8_t profile) {
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+    /* Keep the host-selected multiplier across ordinary reconnects because a
+     * bonded host may not rewrite a cached Feature Report on every BLE link.
+     * A cleared profile must always return to the legacy-safe multiplier. */
+    zmk_pointing_resolution_multipliers_reset_profile(
+        (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_BLE,
+                                       .ble = {.profile_index = profile}});
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+
     if (bt_addr_le_cmp(&profiles[profile].peer, BT_ADDR_LE_ANY)) {
         bt_unpair(BT_ID_DEFAULT, &profiles[profile].peer);
         set_profile_address(profile, BT_ADDR_LE_ANY);
