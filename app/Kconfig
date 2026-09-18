@@ -495,6 +495,35 @@ endif # ZMK_COMBO_SETTINGS
 # Combo options
 endmenu
 
+config ZMK_MACRO_SETTINGS
+    bool "Runtime user macro settings storage"
+    depends on SETTINGS
+    depends on ZMK_BEHAVIOR_LOCAL_IDS
+
+if ZMK_MACRO_SETTINGS
+
+config ZMK_MACRO_SETTINGS_MAX_MACROS
+    int "Maximum editable user macro slots"
+    default 16
+    range 1 32
+
+config ZMK_MACRO_SETTINGS_MAX_STEPS_PER_MACRO
+    int "Maximum steps per editable user macro"
+    default 16
+    range 1 32
+
+config ZMK_MACRO_SETTINGS_NAME_MAX_LEN
+    int "Maximum user macro name length"
+    default 24
+    range 8 48
+
+config ZMK_MACRO_SETTINGS_MAX_WAIT_MS
+    int "Maximum wait step duration in milliseconds"
+    default 60000
+    range 1 65535
+
+endif # ZMK_MACRO_SETTINGS
+
 menu "Behavior Options"
 
 config ZMK_BEHAVIORS_QUEUE_SIZE

@@ -54,6 +54,7 @@ if ((NOT CONFIG_ZMK_SPLIT) OR CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
   target_sources(app PRIVATE src/behaviors/behavior_caps_word.c)
   target_sources(app PRIVATE src/behaviors/behavior_key_repeat.c)
   target_sources_ifdef(CONFIG_ZMK_BEHAVIOR_MACRO app PRIVATE src/behaviors/behavior_macro.c)
+  target_sources_ifdef(CONFIG_ZMK_MACRO_SETTINGS app PRIVATE src/behaviors/behavior_user_macro.c)
   target_sources(app PRIVATE src/behaviors/behavior_momentary_layer.c)
   target_sources(app PRIVATE src/behaviors/behavior_mod_morph.c)
   target_sources(app PRIVATE src/behaviors/behavior_outputs.c)
@@ -128,6 +129,7 @@ if (CONFIG_ZMK_STUDIO_RPC)
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/keymap.proto
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/meteorite.proto
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/combos.proto
+                        ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/macros.proto
   )
 
   target_include_directories(app PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
