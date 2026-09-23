@@ -130,19 +130,20 @@ endmenu
 
 config ZMK_STUDIO_RPC_THREAD_STACK_SIZE
     int "RPC Thread Stack Size"
-    default 8192 if ZMK_MACRO_SETTINGS
+    default 1024 if SOC_STM32F072XB
     default 3072 if SOC_SERIES_SAMD21
+    default 8192 if ZMK_MACRO_SETTINGS
     default 4096
     help
       Request/response nanopb structs plus user-macro set/get handlers share this
       stack. 4096 overflows on set_macro because the request, returned response,
       packed Macro body, and notification copies are live at the same time.
-      SAMD21 Studio builds stay at 3072. The fork's Studio messages already fill
-      the 32KB RAM with the 4096 default, and these boards do not enable user
-      macros.
+      Boards that enable Studio without user macros keep a smaller stack when
+      RAM is tight: 3072 on SAMD21 and 1024 on STM32F072.
 
 config ZMK_STUDIO_RPC_NOTIFICATION_QUEUE_SIZE
     int "RPC outbound notification queue depth"
+    default 1 if SOC_STM32F072XB
     default 2
     range 1 8
     help
