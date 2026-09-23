@@ -352,7 +352,8 @@ static int encode_body(const struct zmk_user_macro_slot *slot, uint8_t *body, si
 }
 
 static uint16_t expanded_event_count(const struct zmk_user_macro_slot *slot) {
-    uint16_t count = slot->step_count > 0 && slot->steps[0].action == ZMK_USER_MACRO_STEP_WAIT ? 1 : 0;
+    uint16_t count =
+        slot->step_count > 0 && slot->steps[0].action == ZMK_USER_MACRO_STEP_WAIT ? 1 : 0;
     for (uint8_t i = 0; i < slot->step_count; i++) {
         const struct zmk_user_macro_step *step = &slot->steps[i];
         if (step->action == ZMK_USER_MACRO_STEP_TAP) {
@@ -401,8 +402,7 @@ static int validate_slot(const struct zmk_user_macro_slot *slot) {
             }
             continue;
         }
-        if ((step->action != ZMK_USER_MACRO_STEP_TAP &&
-             step->action != ZMK_USER_MACRO_STEP_PRESS &&
+        if ((step->action != ZMK_USER_MACRO_STEP_TAP && step->action != ZMK_USER_MACRO_STEP_PRESS &&
              step->action != ZMK_USER_MACRO_STEP_RELEASE) ||
             step->packed_len != 0 ||
             !key_press_binding_is_valid(step->behavior_local_id, step->param1)) {
@@ -535,7 +535,8 @@ static int apply_body_locked(uint8_t slot_index, const char *name, uint8_t occup
     return 0;
 }
 
-static int encode_settings_blob(uint8_t slot_index, uint8_t *blob, size_t blob_max, size_t *out_len) {
+static int encode_settings_blob(uint8_t slot_index, uint8_t *blob, size_t blob_max,
+                                size_t *out_len) {
     const struct user_macro_slot_state *state = &current_slots[slot_index];
     uint8_t flags = 0;
     size_t name_len = 0;
@@ -676,8 +677,8 @@ static void seed_defaults_locked(void) {}
 
 static int reset_slot_to_factory_locked(uint8_t slot_index) {
     char setting_name[24];
-    snprintf(setting_name, sizeof(setting_name), USER_MACRO_SETTING_SUBTREE "/" USER_MACRO_SETTING_SLOT_KEY,
-             slot_index);
+    snprintf(setting_name, sizeof(setting_name),
+             USER_MACRO_SETTING_SUBTREE "/" USER_MACRO_SETTING_SLOT_KEY, slot_index);
     settings_delete(setting_name);
     clear_slot_state(&current_slots[slot_index]);
     pool_store_body(slot_index, NULL, 0);
@@ -686,21 +687,13 @@ static int reset_slot_to_factory_locked(uint8_t slot_index) {
     return 0;
 }
 
-size_t zmk_user_macro_get_slot_count(void) {
-    return CONFIG_ZMK_MACRO_SETTINGS_MAX_MACROS;
-}
+size_t zmk_user_macro_get_slot_count(void) { return CONFIG_ZMK_MACRO_SETTINGS_MAX_MACROS; }
 
-size_t zmk_user_macro_get_max_steps(void) {
-    return CONFIG_ZMK_MACRO_SETTINGS_MAX_STEPS_PER_MACRO;
-}
+size_t zmk_user_macro_get_max_steps(void) { return CONFIG_ZMK_MACRO_SETTINGS_MAX_STEPS_PER_MACRO; }
 
-size_t zmk_user_macro_get_max_bytes(void) {
-    return CONFIG_ZMK_MACRO_SETTINGS_MAX_BYTES;
-}
+size_t zmk_user_macro_get_max_bytes(void) { return CONFIG_ZMK_MACRO_SETTINGS_MAX_BYTES; }
 
-size_t zmk_user_macro_get_pool_total(void) {
-    return CONFIG_ZMK_MACRO_SETTINGS_POOL_BYTES;
-}
+size_t zmk_user_macro_get_pool_total(void) { return CONFIG_ZMK_MACRO_SETTINGS_POOL_BYTES; }
 
 size_t zmk_user_macro_get_pool_used(void) {
     k_mutex_lock(&user_macro_mutex, K_FOREVER);
@@ -823,7 +816,7 @@ static void next_macro_entry(void *context, struct zmk_behavior_queue_entry *ent
     entry->binding = (struct zmk_behavior_binding){
         .behavior_dev = KEY_PRESS_DEVICE_NAME,
         .param1 = text ? packed_to_usage(slot->packed_keys[step->packed_off + state->packed_index])
-                      : step->param1,
+                       : step->param1,
     };
     entry->press = tap ? !state->release : step->action == ZMK_USER_MACRO_STEP_PRESS;
     if (tap && !state->release) {
@@ -868,7 +861,8 @@ int zmk_user_macro_queue(uint8_t slot_index, const struct zmk_behavior_binding_e
         return ret;
     }
     struct user_macro_queue_state state = {.slot = &slot, .tap_ms = tap_ms};
-    return zmk_behavior_queue_add_batch(event, expanded_event_count(&slot), next_macro_entry, &state);
+    return zmk_behavior_queue_add_batch(event, expanded_event_count(&slot), next_macro_entry,
+                                        &state);
 }
 
 int zmk_user_macro_check_unsaved_changes(void) {
@@ -928,8 +922,7 @@ static int user_macro_handle_set(const char *name, size_t len, settings_read_cb 
     if (settings_name_steq(name, USER_MACRO_SETTING_TAP_MS, &next) && (!next || !next[0])) {
         uint32_t tap_ms = 0;
         int ret = read_cb(cb_arg, &tap_ms, MIN(len, sizeof(tap_ms)));
-        if (ret != sizeof(tap_ms) || tap_ms == 0 ||
-            tap_ms > CONFIG_ZMK_MACRO_SETTINGS_MAX_TAP_MS) {
+        if (ret != sizeof(tap_ms) || tap_ms == 0 || tap_ms > CONFIG_ZMK_MACRO_SETTINGS_MAX_TAP_MS) {
             LOG_WRN("Ignoring invalid user macro tap_ms");
             return 0;
         }
@@ -989,8 +982,8 @@ static int user_macro_handle_commit(void) {
     return 0;
 }
 
-SETTINGS_STATIC_HANDLER_DEFINE(user_macros, USER_MACRO_SETTING_SUBTREE, NULL,
-                               user_macro_handle_set, user_macro_handle_commit, NULL);
+SETTINGS_STATIC_HANDLER_DEFINE(user_macros, USER_MACRO_SETTING_SUBTREE, NULL, user_macro_handle_set,
+                               user_macro_handle_commit, NULL);
 
 static void reset_all_locked(bool delete_settings) {
     for (uint8_t i = 0; i < ARRAY_SIZE(current_slots); i++) {
@@ -1059,13 +1052,13 @@ static const struct behavior_driver_api behavior_user_macro_driver_api = {
     BUILD_ASSERT(DT_INST_PROP(n, slot) < CONFIG_ZMK_MACRO_SETTINGS_MAX_MACROS,                     \
                  "User macro slot exceeds CONFIG_ZMK_MACRO_SETTINGS_MAX_MACROS");                  \
     static const struct behavior_user_macro_config behavior_user_macro_config_##n = {              \
-        .slot_index = DT_INST_PROP(n, slot),                                                        \
+        .slot_index = DT_INST_PROP(n, slot),                                                       \
     };                                                                                             \
     static int behavior_user_macro_init_##n(const struct device *dev) {                            \
         return zmk_user_macro_register_behavior(DT_INST_PROP(n, slot), dev->name);                 \
     }                                                                                              \
     BEHAVIOR_DT_INST_DEFINE(n, behavior_user_macro_init_##n, NULL, NULL,                           \
-                            &behavior_user_macro_config_##n, POST_KERNEL,                           \
+                            &behavior_user_macro_config_##n, POST_KERNEL,                          \
                             CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &behavior_user_macro_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(USER_MACRO_INST)

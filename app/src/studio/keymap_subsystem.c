@@ -410,8 +410,8 @@ zmk_studio_Response set_layer_sensor_binding_param(const zmk_studio_Request *req
             zmk_keymap_SetLayerSensorBindingResponse_SET_LAYER_SENSOR_BINDING_RESP_INVALID_PARAMETERS);
     }
 
-    ret = zmk_keymap_set_layer_sensor_binding_param_at_idx(set_req->layer_id,
-                                                           set_req->sensor_index, param, binding);
+    ret = zmk_keymap_set_layer_sensor_binding_param_at_idx(set_req->layer_id, set_req->sensor_index,
+                                                           param, binding);
 
     if (ret < 0) {
         LOG_WRN("Setting the sensor binding param failed with %d", ret);

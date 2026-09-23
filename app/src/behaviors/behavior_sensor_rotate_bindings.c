@@ -19,9 +19,10 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-static int zmk_behavior_sensor_rotate_bindings_process(
-    struct zmk_behavior_binding *binding, struct zmk_behavior_binding_event event,
-    enum behavior_sensor_binding_process_mode mode) {
+static int
+zmk_behavior_sensor_rotate_bindings_process(struct zmk_behavior_binding *binding,
+                                            struct zmk_behavior_binding_event event,
+                                            enum behavior_sensor_binding_process_mode mode) {
     const struct device *dev = zmk_behavior_get_binding(binding->behavior_dev);
     struct behavior_sensor_rotate_data *data = dev->data;
 
@@ -47,8 +48,8 @@ static int zmk_behavior_sensor_rotate_bindings_process(
     int ret = zmk_keymap_get_layer_sensor_binding_param_at_idx(event.layer, sensor_index, param,
                                                                &triggered_binding);
     if (ret < 0 || !triggered_binding.behavior_dev) {
-        LOG_WRN("No sensor direction binding for sensor %d param %d on layer %d (%d)",
-                sensor_index, param, event.layer, ret);
+        LOG_WRN("No sensor direction binding for sensor %d param %d on layer %d (%d)", sensor_index,
+                param, event.layer, ret);
         return ZMK_BEHAVIOR_TRANSPARENT;
     }
 
@@ -70,9 +71,9 @@ static const struct behavior_driver_api behavior_sensor_rotate_bindings_driver_a
     .sensor_binding_process = zmk_behavior_sensor_rotate_bindings_process,
 };
 
-#define SENSOR_ROTATE_BINDINGS_INST(n)                                                            \
+#define SENSOR_ROTATE_BINDINGS_INST(n)                                                             \
     static struct behavior_sensor_rotate_config behavior_sensor_rotate_bindings_config_##n = {     \
-        .magic = BEHAVIOR_SENSOR_ROTATE_CONFIG_MAGIC,                                             \
+        .magic = BEHAVIOR_SENSOR_ROTATE_CONFIG_MAGIC,                                              \
         .tap_ms = DT_INST_PROP(n, tap_ms),                                                         \
         .override_params = false,                                                                  \
     };                                                                                             \

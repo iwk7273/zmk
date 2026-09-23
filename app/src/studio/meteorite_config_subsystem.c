@@ -444,14 +444,13 @@ static bool encode_field_options(pb_ostream_t *stream, const pb_field_t *field, 
     case METEORITE_OPTIONS_HOLD_TAP_FLAVOR:
         return encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED,
                              "Hold preferred", 0, "Hold preferred") &&
-               encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_BALANCED,
-                             "Balanced", 0, "Balanced") &&
+               encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_BALANCED, "Balanced",
+                             0, "Balanced") &&
                encode_option(stream, field, ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_PREFERRED,
                              "Tap preferred", 0, "Tap preferred") &&
-               encode_option(
-                   stream, field,
-                   ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
-                   "Tap unless interrupted", 0, "Tap unless interrupted");
+               encode_option(stream, field,
+                             ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED,
+                             "Tap unless interrupted", 0, "Tap unless interrupted");
     case METEORITE_OPTIONS_POINTER_PROFILE:
         return encode_option(stream, field, ZMK_POINTER_PROFILE_STANDARD, "Standard",
                              ZMK_POINTER_PROFILE_STANDARD, "Standard") &&
@@ -641,14 +640,12 @@ static void apply_timing_config(struct zmk_custom_config *cfg,
     if (timing->has_mod_tap) {
         cfg->mod_tap_flavor = (uint8_t)timing->mod_tap.flavor;
         cfg->mod_tap_quick_tap_ms = (uint16_t)timing->mod_tap.quick_tap_ms;
-        cfg->mod_tap_require_prior_idle_ms =
-            (uint16_t)timing->mod_tap.require_prior_idle_ms;
+        cfg->mod_tap_require_prior_idle_ms = (uint16_t)timing->mod_tap.require_prior_idle_ms;
     }
     if (timing->has_layer_tap) {
         cfg->layer_tap_flavor = (uint8_t)timing->layer_tap.flavor;
         cfg->layer_tap_quick_tap_ms = (uint16_t)timing->layer_tap.quick_tap_ms;
-        cfg->layer_tap_require_prior_idle_ms =
-            (uint16_t)timing->layer_tap.require_prior_idle_ms;
+        cfg->layer_tap_require_prior_idle_ms = (uint16_t)timing->layer_tap.require_prior_idle_ms;
     }
 }
 
@@ -667,7 +664,8 @@ static void apply_pointer_config(struct zmk_custom_config *cfg,
     }
 }
 
-static struct zmk_custom_config custom_config_from_values(const zmk_meteorite_ConfigValues *values) {
+static struct zmk_custom_config
+custom_config_from_values(const zmk_meteorite_ConfigValues *values) {
     /* Start from the current state so optional submessages omitted by older
      * clients are preserved rather than cleared. */
     struct zmk_custom_config cfg = *zmk_custom_config_get();
@@ -764,8 +762,7 @@ static bool hold_tap_config_is_valid(const zmk_meteorite_HoldTapConfig *hold_tap
     int32_t flavor = (int32_t)hold_tap->flavor;
     return flavor >= ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_HOLD_PREFERRED &&
            flavor <= ZMK_CUSTOM_CONFIG_HOLD_TAP_FLAVOR_TAP_UNLESS_INTERRUPTED &&
-           stepped_value_is_valid(hold_tap->quick_tap_ms,
-                                  ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MIN_MS,
+           stepped_value_is_valid(hold_tap->quick_tap_ms, ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MIN_MS,
                                   ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_MAX_MS,
                                   ZMK_CUSTOM_CONFIG_HOLD_TAP_TIMING_STEP_MS, true) &&
            stepped_value_is_valid(hold_tap->require_prior_idle_ms,
@@ -775,14 +772,12 @@ static bool hold_tap_config_is_valid(const zmk_meteorite_HoldTapConfig *hold_tap
 }
 
 static bool timing_config_is_valid(const zmk_meteorite_TimingConfig *timing) {
-    if (!stepped_value_is_valid(timing->mod_tap_tapping_term_ms,
-                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
-                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS,
-                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS, false) ||
-        !stepped_value_is_valid(timing->layer_tap_tapping_term_ms,
-                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
-                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS,
-                                ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS, false) ||
+    if (!stepped_value_is_valid(
+            timing->mod_tap_tapping_term_ms, ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
+            ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS, ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS, false) ||
+        !stepped_value_is_valid(
+            timing->layer_tap_tapping_term_ms, ZMK_CUSTOM_CONFIG_TAPPING_TERM_MIN_MS,
+            ZMK_CUSTOM_CONFIG_TAPPING_TERM_MAX_MS, ZMK_CUSTOM_CONFIG_TAPPING_TERM_STEP_MS, false) ||
         !stepped_value_is_valid(timing->idle_timeout_s, ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_MIN_S,
                                 ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_MAX_S,
                                 ZMK_CUSTOM_CONFIG_IDLE_TIMEOUT_STEP_S, true) ||
@@ -808,8 +803,7 @@ static bool config_values_are_valid(const zmk_meteorite_ConfigValues *values) {
     if (!(values->cpi_idx < zmk_custom_config_cpi_count() &&
           values->scroll_div < zmk_custom_config_scroll_div_count() &&
           values->rotation_idx < zmk_custom_config_rotation_count() &&
-          bool_value_is_valid(values->scroll_h_rev) &&
-          bool_value_is_valid(values->scroll_v_rev) &&
+          bool_value_is_valid(values->scroll_h_rev) && bool_value_is_valid(values->scroll_v_rev) &&
           bool_value_is_valid(values->scaling_mode) &&
           bool_value_is_valid(values->scroll_scaling_mode) &&
           values->scroll_layer_1 < zmk_custom_config_layer_count() &&
@@ -873,15 +867,14 @@ static zmk_studio_Response set_config(const zmk_studio_Request *req) {
 
     if (!config_values_are_valid(&set_req->config)) {
         return METEORITE_RESPONSE(
-            set_config,
-            zmk_meteorite_SetConfigResponse_SET_CONFIG_RESP_ERR_INVALID_VALUE);
+            set_config, zmk_meteorite_SetConfigResponse_SET_CONFIG_RESP_ERR_INVALID_VALUE);
     }
 
     struct zmk_custom_config cfg = custom_config_from_values(&set_req->config);
     int ret = zmk_custom_config_set(&cfg);
     if (ret < 0) {
-        return METEORITE_RESPONSE(
-            set_config, zmk_meteorite_SetConfigResponse_SET_CONFIG_RESP_ERR_GENERIC);
+        return METEORITE_RESPONSE(set_config,
+                                  zmk_meteorite_SetConfigResponse_SET_CONFIG_RESP_ERR_GENERIC);
     }
 
     return METEORITE_RESPONSE(set_config, zmk_meteorite_SetConfigResponse_SET_CONFIG_RESP_OK);
@@ -898,8 +891,7 @@ static void map_errno_to_save_resp(int err, zmk_meteorite_SaveChangesResponse *r
 
     switch (err) {
     case -ENOTSUP:
-        resp->result.err =
-            zmk_meteorite_SaveChangesErrorCode_SAVE_CHANGES_ERR_NOT_SUPPORTED;
+        resp->result.err = zmk_meteorite_SaveChangesErrorCode_SAVE_CHANGES_ERR_NOT_SUPPORTED;
         break;
     case -ENOSPC:
         resp->result.err = zmk_meteorite_SaveChangesErrorCode_SAVE_CHANGES_ERR_NO_SPACE;

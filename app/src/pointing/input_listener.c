@@ -257,8 +257,7 @@ static void apply_resolution_scaling(struct input_listener_data *data, struct in
     uint8_t resolution_value;
     struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
     uint8_t endpoint_index = zmk_endpoint_instance_to_index(endpoint);
-    uint32_t generation =
-        zmk_pointing_resolution_multipliers_get_profile_generation(endpoint);
+    uint32_t generation = zmk_pointing_resolution_multipliers_get_profile_generation(endpoint);
     struct zmk_pointing_resolution_multipliers profile =
         zmk_pointing_resolution_multipliers_get_profile(endpoint);
 
@@ -298,8 +297,7 @@ static void apply_resolution_scaling(struct input_listener_data *data, struct in
      * Scale them to the resolution requested by the current host. */
     int32_t accumulated = (int32_t)evt->value * multiplier + (int32_t)*remainder;
     int16_t scaled = accumulated / ZMK_POINTING_RESOLUTION_MULTIPLIER_MAX;
-    *remainder = accumulated -
-                 ((int32_t)scaled * ZMK_POINTING_RESOLUTION_MULTIPLIER_MAX);
+    *remainder = accumulated - ((int32_t)scaled * ZMK_POINTING_RESOLUTION_MULTIPLIER_MAX);
     evt->value = scaled;
 }
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)

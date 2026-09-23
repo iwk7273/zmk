@@ -114,8 +114,7 @@ struct active_combo {
     COND_CODE_1(IS_EQ(DT_PROP_LEN(n, key_positions), positions),                                   \
                 (                                                                                  \
                     {                                                                              \
-                        COMBO_SETTINGS_FIELDS(n)                                                    \
-                        .timeout_ms = DT_PROP(n, timeout_ms),                                      \
+                        COMBO_SETTINGS_FIELDS(n).timeout_ms = DT_PROP(n, timeout_ms),              \
                         .require_prior_idle_ms = DT_PROP(n, require_prior_idle_ms),                \
                         .key_positions = DT_PROP(n, key_positions),                                \
                         .key_position_len = DT_PROP_LEN(n, key_positions),                         \
@@ -195,9 +194,7 @@ static bool combo_is_enabled(uint16_t index) {
 #endif
 }
 
-static void clear_combo_lookup(void) {
-    memset(combo_lookup, 0, sizeof(combo_lookup));
-}
+static void clear_combo_lookup(void) { memset(combo_lookup, 0, sizeof(combo_lookup)); }
 
 // Store the combo key pointer in the lookup array, one pointer for each key position.
 static int initialize_combo(size_t index) {
@@ -677,8 +674,7 @@ static bool combo_slot_equal(const struct combo_cfg *left, const struct combo_cf
         return false;
     }
 
-    return memcmp(left->key_positions, right->key_positions,
-                  sizeof(left->key_positions)) == 0;
+    return memcmp(left->key_positions, right->key_positions, sizeof(left->key_positions)) == 0;
 }
 
 static bool combo_slot_matches_stock_default(uint8_t slot_index) {
@@ -730,9 +726,7 @@ static void load_stock_defaults(void) {
     }
 }
 
-static void reset_to_stock_defaults(void) {
-    memcpy(combos, stock_default_combos, sizeof(combos));
-}
+static void reset_to_stock_defaults(void) { memcpy(combos, stock_default_combos, sizeof(combos)); }
 
 static int stock_slot_for_id(const char *combo_id) {
     for (uint8_t i = 0; i < ARRAY_SIZE(stock_default_combos); i++) {
@@ -750,8 +744,7 @@ static int user_slot_for_id(const char *combo_id) {
     }
     char *endptr;
     unsigned long slot = strtoul(combo_id + 5, &endptr, 10);
-    if (*endptr != '\0' || slot >= COMBO_STORAGE_COUNT ||
-        slot < ARRAY_SIZE(stock_combos)) {
+    if (*endptr != '\0' || slot >= COMBO_STORAGE_COUNT || slot < ARRAY_SIZE(stock_combos)) {
         return -EINVAL;
     }
     return (int)slot;
@@ -813,7 +806,8 @@ static int record_to_combo(const struct combo_setting_record *record, struct com
     if (record->key_position_count < 2 ||
         record->key_position_count > CONFIG_ZMK_COMBO_SETTINGS_MAX_KEYS_PER_COMBO ||
         record->layer_count > CONFIG_ZMK_COMBO_SETTINGS_MAX_LAYERS ||
-        record->require_prior_idle_ms < -1 || !values_are_unique_u8(record->key_positions, record->key_position_count) ||
+        record->require_prior_idle_ms < -1 ||
+        !values_are_unique_u8(record->key_positions, record->key_position_count) ||
         !values_are_unique_u8(record->layers, record->layer_count)) {
         return -EINVAL;
     }
@@ -830,7 +824,8 @@ static int record_to_combo(const struct combo_setting_record *record, struct com
         }
     }
 
-    const char *behavior_name = zmk_behavior_find_behavior_name_from_local_id(record->behavior_local_id);
+    const char *behavior_name =
+        zmk_behavior_find_behavior_name_from_local_id(record->behavior_local_id);
     if (!behavior_name) {
         return -ENODEV;
     }
@@ -1088,7 +1083,8 @@ int zmk_combo_save_changes(void) {
         }
 
         char full_setting_name[24];
-        snprintf(full_setting_name, sizeof(full_setting_name), COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
+        snprintf(full_setting_name, sizeof(full_setting_name),
+                 COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
         ret = settings_save_one(full_setting_name, &record, sizeof(record));
         if (ret < 0) {
             k_mutex_unlock(&combo_mutex);
@@ -1122,7 +1118,8 @@ int zmk_combo_reset_settings(void) {
     }
     for (uint8_t i = 0; i < CONFIG_ZMK_COMBO_SETTINGS_MAX_COMBOS; i++) {
         char full_setting_name[24];
-        snprintf(full_setting_name, sizeof(full_setting_name), COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
+        snprintf(full_setting_name, sizeof(full_setting_name),
+                 COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
         settings_delete(full_setting_name);
     }
 

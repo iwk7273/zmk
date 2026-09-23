@@ -55,8 +55,8 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
                                             void *const *arg) {
     ARG_UNUSED(arg);
 
-#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG) || IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS) ||              \
-    IS_ENABLED(CONFIG_ZMK_MACRO_SETTINGS) ||                                                        \
+#if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG) || IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS) ||               \
+    IS_ENABLED(CONFIG_ZMK_MACRO_SETTINGS) ||                                                       \
     (IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS)
     const char *capabilities[] = {
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)

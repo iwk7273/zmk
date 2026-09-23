@@ -33,6 +33,6 @@ int zmk_behavior_sensor_rotate_common_accept_data(
 int zmk_behavior_sensor_rotate_common_process(struct zmk_behavior_binding *binding,
                                               struct zmk_behavior_binding_event event,
                                               enum behavior_sensor_binding_process_mode mode);
-int zmk_behavior_sensor_rotate_get_binding_param(
-    const struct zmk_behavior_binding *sensor_binding, enum zmk_keymap_sensor_binding_param param,
-    struct zmk_behavior_binding *binding);
+int zmk_behavior_sensor_rotate_get_binding_param(const struct zmk_behavior_binding *sensor_binding,
+                                                 enum zmk_keymap_sensor_binding_param param,
+                                                 struct zmk_behavior_binding *binding);

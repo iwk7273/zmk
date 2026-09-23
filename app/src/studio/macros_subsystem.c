@@ -296,15 +296,13 @@ static zmk_studio_Response reset_macro(const zmk_studio_Request *req) {
 
 static zmk_studio_Response check_unsaved_changes(const zmk_studio_Request *req) {
     ARG_UNUSED(req);
-    return MACROS_RESPONSE(check_unsaved_changes,
-                           zmk_user_macro_check_unsaved_changes() > 0);
+    return MACROS_RESPONSE(check_unsaved_changes, zmk_user_macro_check_unsaved_changes() > 0);
 }
 
 static void map_errno_to_save_resp(int err, zmk_macros_SaveChangesResponse *resp) {
     resp->which_result = zmk_macros_SaveChangesResponse_err_tag;
     if (err == -ENOTSUP) {
-        resp->result.err =
-            zmk_macros_SaveChangesErrorCode_SAVE_CHANGES_ERR_NOT_SUPPORTED;
+        resp->result.err = zmk_macros_SaveChangesErrorCode_SAVE_CHANGES_ERR_NOT_SUPPORTED;
     } else if (err == -ENOSPC) {
         resp->result.err = zmk_macros_SaveChangesErrorCode_SAVE_CHANGES_ERR_NO_SPACE;
     } else {
@@ -336,9 +334,7 @@ static zmk_studio_Response discard_changes(const zmk_studio_Request *req) {
     return MACROS_RESPONSE(discard_changes, true);
 }
 
-static int macros_settings_reset(void) {
-    return zmk_user_macro_reset_settings();
-}
+static int macros_settings_reset(void) { return zmk_user_macro_reset_settings(); }
 
 ZMK_RPC_SUBSYSTEM_SETTINGS_RESET(macros, macros_settings_reset);
 

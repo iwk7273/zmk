@@ -138,7 +138,8 @@ static int proto_combo_to_slot(const zmk_combos_Combo *proto, struct zmk_combo_s
                        : ZMK_COMBO_SOURCE_STOCK;
     slot->enabled = proto->enabled;
 
-    const char *behavior_name = zmk_behavior_find_behavior_name_from_local_id(proto->binding.behavior_id);
+    const char *behavior_name =
+        zmk_behavior_find_behavior_name_from_local_id(proto->binding.behavior_id);
     if (slot->enabled && !behavior_name) {
         return -ENODEV;
     }
