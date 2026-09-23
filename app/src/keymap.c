@@ -109,7 +109,7 @@ static struct zmk_behavior_binding
 
 #if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_sensor_rotate_bindings)
 #define ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS 1
-#define SENSOR_DIRECTION_BINDINGS_BEHAVIOR_NAME                                                   \
+#define SENSOR_DIRECTION_BINDINGS_BEHAVIOR_NAME                                                    \
     DEVICE_DT_NAME(DT_COMPAT_GET_ANY_STATUS_OKAY(zmk_behavior_sensor_rotate_bindings))
 
 static struct zmk_behavior_binding
@@ -297,8 +297,7 @@ zmk_keymap_get_layer_binding_at_idx(zmk_keymap_layer_id_t layer_id, uint16_t bin
     return &zmk_keymap[layer_id][mapped_idx];
 }
 
-int zmk_keymap_get_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer_id,
-                                               uint16_t sensor_idx,
+int zmk_keymap_get_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer_id, uint16_t sensor_idx,
                                                struct zmk_behavior_binding *binding) {
 #if ZMK_KEYMAP_HAS_SENSORS
     if (!binding) {
@@ -339,8 +338,7 @@ static int init_sensor_direction_bindings_from_stock(zmk_keymap_layer_id_t layer
                                                      uint16_t sensor_idx) {
     for (int p = 0; p < ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT; p++) {
         int ret = zmk_behavior_sensor_rotate_get_binding_param(
-            &zmk_stock_sensor_keymap[layer_id][sensor_idx],
-            (enum zmk_keymap_sensor_binding_param)p,
+            &zmk_stock_sensor_keymap[layer_id][sensor_idx], (enum zmk_keymap_sensor_binding_param)p,
             &zmk_sensor_direction_keymap[layer_id][sensor_idx][p]);
         if (ret < 0) {
             return ret;
@@ -388,9 +386,10 @@ static void clear_sensor_direction_bindings(zmk_keymap_layer_id_t layer_id, uint
 }
 #endif /* ZMK_KEYMAP_HAS_SENSORS && ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS */
 
-int zmk_keymap_get_layer_sensor_binding_param_at_idx(
-    zmk_keymap_layer_id_t layer_id, uint16_t sensor_idx, enum zmk_keymap_sensor_binding_param param,
-    struct zmk_behavior_binding *binding) {
+int zmk_keymap_get_layer_sensor_binding_param_at_idx(zmk_keymap_layer_id_t layer_id,
+                                                     uint16_t sensor_idx,
+                                                     enum zmk_keymap_sensor_binding_param param,
+                                                     struct zmk_behavior_binding *binding) {
 #if ZMK_KEYMAP_HAS_SENSORS && ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
     if (!binding || param >= ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT) {
         return -EINVAL;
@@ -429,10 +428,8 @@ static uint8_t zmk_keymap_layer_pending_changes[ZMK_KEYMAP_LAYERS_LEN][PENDING_A
 
 static uint8_t zmk_sensor_pending_changes[ZMK_KEYMAP_LAYERS_LEN][SENSOR_PENDING_ARRAY_SIZE];
 #if ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
-static uint8_t zmk_sensor_direction_pending_changes[ZMK_KEYMAP_LAYERS_LEN]
-                                                 [ZMK_KEYMAP_SENSORS_LEN];
-static uint8_t zmk_sensor_direction_loaded_settings[ZMK_KEYMAP_LAYERS_LEN]
-                                                   [ZMK_KEYMAP_SENSORS_LEN];
+static uint8_t zmk_sensor_direction_pending_changes[ZMK_KEYMAP_LAYERS_LEN][ZMK_KEYMAP_SENSORS_LEN];
+static uint8_t zmk_sensor_direction_loaded_settings[ZMK_KEYMAP_LAYERS_LEN][ZMK_KEYMAP_SENSORS_LEN];
 #endif
 #endif /* ZMK_KEYMAP_HAS_SENSORS */
 
@@ -513,9 +510,10 @@ int zmk_keymap_set_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer_id, u
 #endif /* ZMK_KEYMAP_HAS_SENSORS */
 }
 
-int zmk_keymap_set_layer_sensor_binding_param_at_idx(
-    zmk_keymap_layer_id_t layer_id, uint16_t sensor_idx, enum zmk_keymap_sensor_binding_param param,
-    struct zmk_behavior_binding binding) {
+int zmk_keymap_set_layer_sensor_binding_param_at_idx(zmk_keymap_layer_id_t layer_id,
+                                                     uint16_t sensor_idx,
+                                                     enum zmk_keymap_sensor_binding_param param,
+                                                     struct zmk_behavior_binding binding) {
 #if ZMK_KEYMAP_HAS_SENSORS && ZMK_KEYMAP_HAS_SENSOR_DIRECTION_BINDINGS
     if (sensor_idx >= ZMK_KEYMAP_SENSORS_LEN || param >= ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT) {
         return -EINVAL;
@@ -536,7 +534,8 @@ int zmk_keymap_set_layer_sensor_binding_param_at_idx(
 
     if (memcmp(&zmk_sensor_direction_keymap[layer_id][sensor_idx][param], &binding,
                sizeof(binding)) == 0 &&
-        is_sensor_direction_bindings_behavior(zmk_sensor_keymap[layer_id][sensor_idx].behavior_dev)) {
+        is_sensor_direction_bindings_behavior(
+            zmk_sensor_keymap[layer_id][sensor_idx].behavior_dev)) {
         k_mutex_unlock(&zmk_sensor_keymap_mutex);
         LOG_DBG("Not setting, no change to layer %d at sensor index %d param %d", layer_id,
                 sensor_idx, param);
@@ -549,8 +548,9 @@ int zmk_keymap_set_layer_sensor_binding_param_at_idx(
     uint8_t *pending = zmk_sensor_pending_changes[layer_id];
     WRITE_BIT(pending[sensor_idx / 8], sensor_idx % 8, 1);
     zmk_sensor_direction_pending_changes[layer_id][sensor_idx] |=
-        had_override ? BIT(param) : BIT(ZMK_KEYMAP_SENSOR_BINDING_PARAM_1) |
-                                      BIT(ZMK_KEYMAP_SENSOR_BINDING_PARAM_2);
+        had_override
+            ? BIT(param)
+            : BIT(ZMK_KEYMAP_SENSOR_BINDING_PARAM_1) | BIT(ZMK_KEYMAP_SENSOR_BINDING_PARAM_2);
 
     k_mutex_unlock(&zmk_sensor_keymap_mutex);
 
@@ -572,9 +572,10 @@ int zmk_keymap_set_layer_sensor_binding_at_idx(zmk_keymap_layer_id_t layer_id, u
     return -ENOTSUP;
 }
 
-int zmk_keymap_set_layer_sensor_binding_param_at_idx(
-    zmk_keymap_layer_id_t layer_id, uint16_t sensor_idx, enum zmk_keymap_sensor_binding_param param,
-    struct zmk_behavior_binding binding) {
+int zmk_keymap_set_layer_sensor_binding_param_at_idx(zmk_keymap_layer_id_t layer_id,
+                                                     uint16_t sensor_idx,
+                                                     enum zmk_keymap_sensor_binding_param param,
+                                                     struct zmk_behavior_binding binding) {
     return -ENOTSUP;
 }
 
@@ -762,8 +763,8 @@ int zmk_keymap_check_unsaved_changes(void) {
 #define SENSOR_BINDING_SETTINGS_KEY "keymap/s/%d/%d"
 #define SENSOR_BINDING_PARAM_SETTINGS_KEY "keymap/sd/%d/%d/%d"
 
-static size_t behavior_binding_setting_len(
-    const struct zmk_behavior_binding_setting *binding_setting) {
+static size_t
+behavior_binding_setting_len(const struct zmk_behavior_binding_setting *binding_setting) {
     size_t len = sizeof(*binding_setting);
     if (binding_setting->param2 == 0) {
         len -= 4;
@@ -874,16 +875,15 @@ static int save_sensor_direction_bindings(void) {
                 int ret = has_override ? save_binding_setting(setting_name, &binding)
                                        : settings_delete(setting_name);
                 if (ret < 0) {
-                    LOG_ERR("Failed to save sensor binding param %d at %d on layer %d (%d)", p,
-                            s, l, ret);
+                    LOG_ERR("Failed to save sensor binding param %d at %d on layer %d (%d)", p, s,
+                            l, ret);
                     return ret;
                 }
 
                 k_mutex_lock(&zmk_sensor_keymap_mutex, K_FOREVER);
                 if (has_override == zmk_sensor_direction_keymap_overrides[l][s] &&
-                    (!has_override ||
-                     memcmp(&zmk_sensor_direction_keymap[l][s][p], &binding, sizeof(binding)) ==
-                         0)) {
+                    (!has_override || memcmp(&zmk_sensor_direction_keymap[l][s][p], &binding,
+                                             sizeof(binding)) == 0)) {
                     WRITE_BIT(zmk_sensor_direction_pending_changes[l][s], p, 0);
                 }
                 k_mutex_unlock(&zmk_sensor_keymap_mutex);
@@ -1535,8 +1535,9 @@ static int keymap_handle_set(const char *name, size_t len, settings_read_cb read
             zmk_behavior_find_behavior_name_from_local_id(binding_setting.behavior_local_id);
 
         if (!name) {
-            LOG_WRN("Loaded sensor param device %d from settings but no device found by that local ID",
-                    binding_setting.behavior_local_id);
+            LOG_WRN(
+                "Loaded sensor param device %d from settings but no device found by that local ID",
+                binding_setting.behavior_local_id);
         }
 
         struct zmk_behavior_binding binding = {
@@ -1664,15 +1665,14 @@ static int keymap_handle_commit(void) {
             if (!zmk_sensor_direction_keymap_overrides[l][s]) {
                 int ret = init_sensor_direction_bindings_from_current(l, s);
                 if (ret < 0) {
-                    LOG_ERR("Failed to restore sensor direction defaults at %d on layer %d (%d)",
-                            s, l, ret);
+                    LOG_ERR("Failed to restore sensor direction defaults at %d on layer %d (%d)", s,
+                            l, ret);
                     continue;
                 }
             }
 
             for (int p = 0; p < ZMK_KEYMAP_SENSOR_BINDING_PARAM_COUNT; p++) {
-                struct zmk_behavior_binding *binding =
-                    &zmk_sensor_direction_keymap[l][s][p];
+                struct zmk_behavior_binding *binding = &zmk_sensor_direction_keymap[l][s][p];
                 bool was_loaded = zmk_sensor_direction_loaded_settings[l][s] & BIT(p);
 
                 if (was_loaded && binding->behavior_dev) {
@@ -1683,14 +1683,14 @@ static int keymap_handle_commit(void) {
                     &zmk_stock_sensor_keymap[l][s], (enum zmk_keymap_sensor_binding_param)p,
                     binding);
                 if (ret < 0) {
-                    LOG_ERR("Failed to repair sensor binding param %d at %d on layer %d (%d)", p,
-                            s, l, ret);
+                    LOG_ERR("Failed to repair sensor binding param %d at %d on layer %d (%d)", p, s,
+                            l, ret);
                     continue;
                 }
 
                 zmk_sensor_direction_pending_changes[l][s] |= BIT(p);
-                LOG_WRN("Repaired missing or invalid sensor binding param %d at %d on layer %d",
-                        p, s, l);
+                LOG_WRN("Repaired missing or invalid sensor binding param %d at %d on layer %d", p,
+                        s, l);
             }
         }
     }

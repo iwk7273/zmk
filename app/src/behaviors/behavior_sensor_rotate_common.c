@@ -103,9 +103,9 @@ int zmk_behavior_sensor_rotate_common_process(struct zmk_behavior_binding *bindi
     return ZMK_BEHAVIOR_OPAQUE;
 }
 
-int zmk_behavior_sensor_rotate_get_binding_param(
-    const struct zmk_behavior_binding *sensor_binding, enum zmk_keymap_sensor_binding_param param,
-    struct zmk_behavior_binding *binding) {
+int zmk_behavior_sensor_rotate_get_binding_param(const struct zmk_behavior_binding *sensor_binding,
+                                                 enum zmk_keymap_sensor_binding_param param,
+                                                 struct zmk_behavior_binding *binding) {
     if (!sensor_binding || !binding) {
         return -EINVAL;
     }

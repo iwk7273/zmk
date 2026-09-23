@@ -22,6 +22,7 @@
 #include <drivers/behavior.h>
 
 #include <zmk/behavior.h>
+#include <zmk/combos.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/keycode_state_changed.h>
 #include <zmk/events/position_state_changed.h>
@@ -114,8 +115,7 @@ struct active_combo {
     COND_CODE_1(IS_EQ(DT_PROP_LEN(n, key_positions), positions),                                   \
                 (                                                                                  \
                     {                                                                              \
-                        COMBO_SETTINGS_FIELDS(n)                                                    \
-                        .timeout_ms = DT_PROP(n, timeout_ms),                                      \
+                        COMBO_SETTINGS_FIELDS(n).timeout_ms = DT_PROP(n, timeout_ms),              \
                         .require_prior_idle_ms = DT_PROP(n, require_prior_idle_ms),                \
                         .key_positions = DT_PROP(n, key_positions),                                \
                         .key_position_len = DT_PROP_LEN(n, key_positions),                         \
@@ -195,9 +195,7 @@ static bool combo_is_enabled(uint16_t index) {
 #endif
 }
 
-static void clear_combo_lookup(void) {
-    memset(combo_lookup, 0, sizeof(combo_lookup));
-}
+static void clear_combo_lookup(void) { memset(combo_lookup, 0, sizeof(combo_lookup)); }
 
 // Store the combo key pointer in the lookup array, one pointer for each key position.
 static int initialize_combo(size_t index) {
@@ -519,11 +517,12 @@ static int position_state_down(const zmk_event_t *ev, struct zmk_position_state_
                     if (num_candidates == 1) {
                         cleanup();
                     }
+                    break;
                 }
-
-                return ret;
             }
         }
+        // Runtime slots are not sorted by key count; a later candidate may be complete.
+        return ret;
     } else {
         cleanup();
         return ret;
@@ -676,8 +675,7 @@ static bool combo_slot_equal(const struct combo_cfg *left, const struct combo_cf
         return false;
     }
 
-    return memcmp(left->key_positions, right->key_positions,
-                  sizeof(left->key_positions)) == 0;
+    return memcmp(left->key_positions, right->key_positions, sizeof(left->key_positions)) == 0;
 }
 
 static bool combo_slot_matches_stock_default(uint8_t slot_index) {
@@ -729,9 +727,7 @@ static void load_stock_defaults(void) {
     }
 }
 
-static void reset_to_stock_defaults(void) {
-    memcpy(combos, stock_default_combos, sizeof(combos));
-}
+static void reset_to_stock_defaults(void) { memcpy(combos, stock_default_combos, sizeof(combos)); }
 
 static int stock_slot_for_id(const char *combo_id) {
     for (uint8_t i = 0; i < ARRAY_SIZE(stock_default_combos); i++) {
@@ -749,8 +745,7 @@ static int user_slot_for_id(const char *combo_id) {
     }
     char *endptr;
     unsigned long slot = strtoul(combo_id + 5, &endptr, 10);
-    if (*endptr != '\0' || slot >= COMBO_STORAGE_COUNT ||
-        slot < ARRAY_SIZE(stock_combos)) {
+    if (*endptr != '\0' || slot >= COMBO_STORAGE_COUNT || slot < ARRAY_SIZE(stock_combos)) {
         return -EINVAL;
     }
     return (int)slot;
@@ -812,7 +807,8 @@ static int record_to_combo(const struct combo_setting_record *record, struct com
     if (record->key_position_count < 2 ||
         record->key_position_count > CONFIG_ZMK_COMBO_SETTINGS_MAX_KEYS_PER_COMBO ||
         record->layer_count > CONFIG_ZMK_COMBO_SETTINGS_MAX_LAYERS ||
-        record->require_prior_idle_ms < -1 || !values_are_unique_u8(record->key_positions, record->key_position_count) ||
+        record->require_prior_idle_ms < -1 ||
+        !values_are_unique_u8(record->key_positions, record->key_position_count) ||
         !values_are_unique_u8(record->layers, record->layer_count)) {
         return -EINVAL;
     }
@@ -829,7 +825,8 @@ static int record_to_combo(const struct combo_setting_record *record, struct com
         }
     }
 
-    const char *behavior_name = zmk_behavior_find_behavior_name_from_local_id(record->behavior_local_id);
+    const char *behavior_name =
+        zmk_behavior_find_behavior_name_from_local_id(record->behavior_local_id);
     if (!behavior_name) {
         return -ENODEV;
     }
@@ -1064,6 +1061,10 @@ int zmk_combo_check_unsaved_changes(void) {
 
 int zmk_combo_save_changes(void) {
     k_mutex_lock(&combo_mutex, K_FOREVER);
+    if (combo_is_busy()) {
+        k_mutex_unlock(&combo_mutex);
+        return -EBUSY;
+    }
     for (uint8_t i = 0; i < COMBO_STORAGE_COUNT; i++) {
         int ret;
         if (combo_slot_matches_stock_default(i)) {
@@ -1083,7 +1084,8 @@ int zmk_combo_save_changes(void) {
         }
 
         char full_setting_name[24];
-        snprintf(full_setting_name, sizeof(full_setting_name), COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
+        snprintf(full_setting_name, sizeof(full_setting_name),
+                 COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
         ret = settings_save_one(full_setting_name, &record, sizeof(record));
         if (ret < 0) {
             k_mutex_unlock(&combo_mutex);
@@ -1097,16 +1099,28 @@ int zmk_combo_save_changes(void) {
 }
 
 int zmk_combo_discard_changes(void) {
-    clear_loaded_settings();
-    int ret = settings_load_subtree(COMBO_SETTING_SUBTREE);
-    return ret;
+    k_mutex_lock(&combo_mutex, K_FOREVER);
+    if (combo_is_busy()) {
+        k_mutex_unlock(&combo_mutex);
+        return -EBUSY;
+    }
+    memcpy(combos, saved_combos, sizeof(combos));
+    clear_runtime_state();
+    rebuild_combo_lookup();
+    k_mutex_unlock(&combo_mutex);
+    return 0;
 }
 
 int zmk_combo_reset_settings(void) {
     k_mutex_lock(&combo_mutex, K_FOREVER);
+    if (combo_is_busy()) {
+        k_mutex_unlock(&combo_mutex);
+        return -EBUSY;
+    }
     for (uint8_t i = 0; i < CONFIG_ZMK_COMBO_SETTINGS_MAX_COMBOS; i++) {
         char full_setting_name[24];
-        snprintf(full_setting_name, sizeof(full_setting_name), COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
+        snprintf(full_setting_name, sizeof(full_setting_name),
+                 COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);
         settings_delete(full_setting_name);
     }
 
@@ -1141,5 +1155,32 @@ static int combo_init(void) {
 }
 
 SYS_INIT(combo_init, APPLICATION, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS) && !DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
+
+size_t zmk_combo_get_slot_count(void) { return 0; }
+
+size_t zmk_combo_get_max_keys_per_combo(void) { return 0; }
+
+int zmk_combo_get_slot(uint8_t slot_index, struct zmk_combo_slot *slot) {
+    ARG_UNUSED(slot_index);
+    ARG_UNUSED(slot);
+    return -EINVAL;
+}
+
+int zmk_combo_set_slot(const struct zmk_combo_slot *slot) {
+    ARG_UNUSED(slot);
+    return -ENOTSUP;
+}
+
+int zmk_combo_check_unsaved_changes(void) { return 0; }
+
+int zmk_combo_save_changes(void) { return 0; }
+
+int zmk_combo_discard_changes(void) { return 0; }
+
+int zmk_combo_reset_settings(void) { return 0; }
 
 #endif

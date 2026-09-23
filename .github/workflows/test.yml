@@ -28,7 +28,7 @@ jobs:
         id: test-dirs
         run: |
           cd app/tests/
-          export TESTS=$(ls -d * | grep -v ble | jq -R -s -c 'split("\n")[:-1]')
+          export TESTS=$(ls -d * | grep -v -e ble -e '^host$' | jq -R -s -c 'split("\n")[:-1]')
           echo "test-dirs=${TESTS}" >> $GITHUB_OUTPUT
   run-tests:
     needs: collect-tests
@@ -73,3 +73,10 @@ jobs:
         with:
           name: "${{ matrix.test }}-log-files"
           path: app/build/**/*.log
+  host-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Run host runtime tests
+        run: python3 app/tests/host/run.py --cc cc

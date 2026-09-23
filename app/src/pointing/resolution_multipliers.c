@@ -36,8 +36,8 @@ zmk_pointing_resolution_multipliers_get_profile(struct zmk_endpoint_instance end
     return multipliers[profile];
 }
 
-uint32_t zmk_pointing_resolution_multipliers_get_profile_generation(
-    struct zmk_endpoint_instance endpoint) {
+uint32_t
+zmk_pointing_resolution_multipliers_get_profile_generation(struct zmk_endpoint_instance endpoint) {
     const int profile = zmk_endpoint_instance_to_index(endpoint);
     return (uint32_t)atomic_get(&multiplier_generations[profile]);
 }

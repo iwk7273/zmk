@@ -198,9 +198,9 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
         if (err) {                                                                                 \
             LOG_ERR("Advertising failed to start (err %d)", err);                                  \
             return err;                                                                            \
-        }                                                                                         \
+        }                                                                                          \
         studio_discovery_advertising = _disc;                                                      \
-        advertising_status = ZMK_ADV_CONN;                                                        \
+        advertising_status = ZMK_ADV_CONN;                                                         \
     }
 #else
 #define CHECKED_OPEN_ADV()                                                                         \
@@ -301,9 +301,8 @@ static void clear_profile_bond(uint8_t profile) {
     /* Keep the host-selected multiplier across ordinary reconnects because a
      * bonded host may not rewrite a cached Feature Report on every BLE link.
      * A cleared profile must always return to the legacy-safe multiplier. */
-    zmk_pointing_resolution_multipliers_reset_profile(
-        (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_BLE,
-                                       .ble = {.profile_index = profile}});
+    zmk_pointing_resolution_multipliers_reset_profile((struct zmk_endpoint_instance){
+        .transport = ZMK_TRANSPORT_BLE, .ble = {.profile_index = profile}});
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
     if (bt_addr_le_cmp(&profiles[profile].peer, BT_ADDR_LE_ANY)) {

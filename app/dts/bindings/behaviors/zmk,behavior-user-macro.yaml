@@ -1,0 +1,14 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: Settings-backed user macro behavior
+
+compatible: "zmk,behavior-user-macro"
+
+include: zero_param.yaml
+
+properties:
+  slot:
+    type: int
+    required: true
+    description: Zero-based runtime user macro slot
