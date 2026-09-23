@@ -20,6 +20,7 @@ ZMK_RPC_SUBSYSTEM(core)
 #define METEORITE_CONFIG_CAPABILITY "meteorite.config"
 #define COMBOS_CONFIG_CAPABILITY "combos.config"
 #define MACROS_CONFIG_CAPABILITY "macros.config"
+#define BLE_PROFILES_CAPABILITY "meteorite.ble_profiles"
 #define KEYMAP_SENSOR_BINDINGS_CAPABILITY "keymap.sensor_bindings"
 #define KEYMAP_SENSOR_DIRECTION_BINDINGS_CAPABILITY "keymap.sensor_direction_bindings"
 
@@ -56,7 +57,7 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
     ARG_UNUSED(arg);
 
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG) || IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS) ||               \
-    IS_ENABLED(CONFIG_ZMK_MACRO_SETTINGS) ||                                                       \
+    IS_ENABLED(CONFIG_ZMK_MACRO_SETTINGS) || IS_ENABLED(CONFIG_ZMK_BLE) ||                         \
     (IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS)
     const char *capabilities[] = {
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
@@ -67,6 +68,9 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
 #endif
 #if IS_ENABLED(CONFIG_ZMK_MACRO_SETTINGS)
         MACROS_CONFIG_CAPABILITY,
+#endif
+#if IS_ENABLED(CONFIG_ZMK_BLE)
+        BLE_PROFILES_CAPABILITY,
 #endif
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS
         KEYMAP_SENSOR_BINDINGS_CAPABILITY,
