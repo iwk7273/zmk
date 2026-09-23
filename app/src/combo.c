@@ -22,6 +22,7 @@
 #include <drivers/behavior.h>
 
 #include <zmk/behavior.h>
+#include <zmk/combos.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/keycode_state_changed.h>
 #include <zmk/events/position_state_changed.h>
@@ -1154,5 +1155,32 @@ static int combo_init(void) {
 }
 
 SYS_INIT(combo_init, APPLICATION, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_COMBO_SETTINGS) && !DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
+
+size_t zmk_combo_get_slot_count(void) { return 0; }
+
+size_t zmk_combo_get_max_keys_per_combo(void) { return 0; }
+
+int zmk_combo_get_slot(uint8_t slot_index, struct zmk_combo_slot *slot) {
+    ARG_UNUSED(slot_index);
+    ARG_UNUSED(slot);
+    return -EINVAL;
+}
+
+int zmk_combo_set_slot(const struct zmk_combo_slot *slot) {
+    ARG_UNUSED(slot);
+    return -ENOTSUP;
+}
+
+int zmk_combo_check_unsaved_changes(void) { return 0; }
+
+int zmk_combo_save_changes(void) { return 0; }
+
+int zmk_combo_discard_changes(void) { return 0; }
+
+int zmk_combo_reset_settings(void) { return 0; }
 
 #endif
