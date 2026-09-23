@@ -502,6 +502,11 @@ config ZMK_MACRO_SETTINGS
 
 if ZMK_MACRO_SETTINGS
 
+# Settings are loaded on the main thread at boot. Legacy macro migration keeps
+# both the encoded record and the decoded steps live across validation calls.
+config MAIN_STACK_SIZE
+    default 4096
+
 config ZMK_MACRO_SETTINGS_MAX_MACROS
     int "Maximum editable user macro slots"
     default 16
@@ -521,6 +526,21 @@ config ZMK_MACRO_SETTINGS_MAX_WAIT_MS
     int "Maximum wait step duration in milliseconds"
     default 60000
     range 1 65535
+
+config ZMK_MACRO_SETTINGS_MAX_TAP_MS
+    int "Maximum tap duration in milliseconds"
+    default 1000
+    range 1 65535
+
+config ZMK_MACRO_SETTINGS_MAX_BYTES
+    int "Maximum encoded body bytes per user macro"
+    default 64
+    range 16 256
+
+config ZMK_MACRO_SETTINGS_POOL_BYTES
+    int "Shared RAM pool for encoded user macro bodies"
+    default 1024
+    range 256 4096
 
 endif # ZMK_MACRO_SETTINGS
 

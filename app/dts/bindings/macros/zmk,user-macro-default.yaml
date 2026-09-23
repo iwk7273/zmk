@@ -1,0 +1,19 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: Compile-time default body for a settings-backed user macro slot
+
+compatible: "zmk,user-macro-default"
+
+properties:
+  slot:
+    type: int
+    required: true
+    description: Zero-based user macro slot to seed when no saved value exists
+  macro-name:
+    type: string
+    description: Display name for the seeded macro. Defaults to the node name.
+  text:
+    type: string
+    required: true
+    description: Packed ASCII text typed by the macro before any Studio edits

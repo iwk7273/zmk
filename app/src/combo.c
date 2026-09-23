@@ -519,11 +519,12 @@ static int position_state_down(const zmk_event_t *ev, struct zmk_position_state_
                     if (num_candidates == 1) {
                         cleanup();
                     }
+                    break;
                 }
-
-                return ret;
             }
         }
+        // Runtime slots are not sorted by key count; a later candidate may be complete.
+        return ret;
     } else {
         cleanup();
         return ret;
@@ -1064,6 +1065,10 @@ int zmk_combo_check_unsaved_changes(void) {
 
 int zmk_combo_save_changes(void) {
     k_mutex_lock(&combo_mutex, K_FOREVER);
+    if (combo_is_busy()) {
+        k_mutex_unlock(&combo_mutex);
+        return -EBUSY;
+    }
     for (uint8_t i = 0; i < COMBO_STORAGE_COUNT; i++) {
         int ret;
         if (combo_slot_matches_stock_default(i)) {
@@ -1097,13 +1102,24 @@ int zmk_combo_save_changes(void) {
 }
 
 int zmk_combo_discard_changes(void) {
-    clear_loaded_settings();
-    int ret = settings_load_subtree(COMBO_SETTING_SUBTREE);
-    return ret;
+    k_mutex_lock(&combo_mutex, K_FOREVER);
+    if (combo_is_busy()) {
+        k_mutex_unlock(&combo_mutex);
+        return -EBUSY;
+    }
+    memcpy(combos, saved_combos, sizeof(combos));
+    clear_runtime_state();
+    rebuild_combo_lookup();
+    k_mutex_unlock(&combo_mutex);
+    return 0;
 }
 
 int zmk_combo_reset_settings(void) {
     k_mutex_lock(&combo_mutex, K_FOREVER);
+    if (combo_is_busy()) {
+        k_mutex_unlock(&combo_mutex);
+        return -EBUSY;
+    }
     for (uint8_t i = 0; i < CONFIG_ZMK_COMBO_SETTINGS_MAX_COMBOS; i++) {
         char full_setting_name[24];
         snprintf(full_setting_name, sizeof(full_setting_name), COMBO_SETTING_SUBTREE "/" COMBO_SETTING_SLOT_KEY, i);

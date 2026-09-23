@@ -130,7 +130,11 @@ endmenu
 
 config ZMK_STUDIO_RPC_THREAD_STACK_SIZE
     int "RPC Thread Stack Size"
-    default 4096
+    default 8192
+    help
+      Request/response nanopb structs plus user-macro set/get handlers share this
+      stack. 4096 overflows on set_macro because the request, returned response,
+      packed Macro body, and notification copies are live at the same time.
 
 config ZMK_STUDIO_RPC_NOTIFICATION_QUEUE_SIZE
     int "RPC outbound notification queue depth"
