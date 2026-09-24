@@ -19,10 +19,17 @@
 #define ZMK_BLE_PROFILE_COUNT CONFIG_BT_MAX_PAIRED
 #endif
 
+#define ZMK_BLE_HOST_LABEL_MAX_LENGTH 64
+
 void zmk_ble_clear_bonds(void);
 int zmk_ble_prof_next(void);
 int zmk_ble_prof_prev(void);
 int zmk_ble_prof_select(uint8_t index);
+int zmk_ble_unpair_profile(uint8_t index);
+int zmk_ble_set_profile_name(uint8_t index, const char *name);
+const char *zmk_ble_profile_name(uint8_t index);
+int zmk_ble_set_host_label(uint8_t index, const char *label);
+const char *zmk_ble_host_label(uint8_t index);
 void zmk_ble_clear_all_bonds(void);
 int zmk_ble_prof_disconnect(uint8_t index);
 
@@ -38,11 +45,11 @@ bool zmk_ble_profile_is_open(uint8_t index);
 
 bool zmk_ble_active_profile_is_open(void);
 bool zmk_ble_active_profile_is_connected(void);
-char *zmk_ble_active_profile_name(void);
+const char *zmk_ble_active_profile_name(void);
 
 int zmk_ble_unpair_all(void);
 
-int zmk_ble_set_device_name(char *name);
+int zmk_ble_set_device_name(const char *name);
 
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_TRANSPORT_BLE)
 int zmk_ble_studio_discovery_start(void);

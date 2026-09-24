@@ -11,6 +11,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/ring_buffer.h>
@@ -68,6 +69,9 @@ enum advertising_type {
                     BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, NULL)
 
 static struct zmk_ble_profile profiles[ZMK_BLE_PROFILE_COUNT];
+/* Keep the existing ble/profiles/N binary layout unchanged. */
+static char profile_names[ZMK_BLE_PROFILE_COUNT][CONFIG_BT_DEVICE_NAME_MAX + 1];
+static char host_labels[ZMK_BLE_PROFILE_COUNT][ZMK_BLE_HOST_LABEL_MAX_LENGTH + 1];
 static uint8_t active_profile;
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
@@ -76,6 +80,71 @@ static uint8_t active_profile;
 BUILD_ASSERT(
     DEVICE_NAME_LEN <= CONFIG_BT_DEVICE_NAME_MAX,
     "ERROR: BLE device name is too long. Max length: " STRINGIFY(CONFIG_BT_DEVICE_NAME_MAX));
+
+static bool profile_text_is_valid(const char *name, size_t max_length, bool allow_empty) {
+    if (!name) {
+        return false;
+    }
+
+    size_t length = strnlen(name, max_length + 1);
+    if ((!allow_empty && length == 0) || length > max_length) {
+        return false;
+    }
+
+    /* Reject invalid UTF-8, overlong encodings, surrogates and controls. */
+    for (size_t i = 0; i < length;) {
+        const uint8_t first = (uint8_t)name[i];
+        uint32_t codepoint;
+        size_t continuation_count;
+        uint32_t minimum;
+
+        if (first < 0x80) {
+            codepoint = first;
+            continuation_count = 0;
+            minimum = 0;
+        } else if (first >= 0xc2 && first <= 0xdf) {
+            codepoint = first & 0x1f;
+            continuation_count = 1;
+            minimum = 0x80;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            codepoint = first & 0x0f;
+            continuation_count = 2;
+            minimum = 0x800;
+        } else if (first >= 0xf0 && first <= 0xf4) {
+            codepoint = first & 0x07;
+            continuation_count = 3;
+            minimum = 0x10000;
+        } else {
+            return false;
+        }
+
+        if (i + continuation_count >= length) {
+            return false;
+        }
+        for (size_t j = 1; j <= continuation_count; j++) {
+            uint8_t next = (uint8_t)name[i + j];
+            if ((next & 0xc0) != 0x80) {
+                return false;
+            }
+            codepoint = (codepoint << 6) | (next & 0x3f);
+        }
+        if (codepoint < minimum || codepoint > 0x10ffff ||
+            (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint < 0x20 ||
+            (codepoint >= 0x7f && codepoint <= 0x9f)) {
+            return false;
+        }
+        i += continuation_count + 1;
+    }
+    return true;
+}
+
+static bool profile_name_is_valid(const char *name) {
+    return profile_text_is_valid(name, CONFIG_BT_DEVICE_NAME_MAX, false);
+}
+
+static bool host_label_is_valid(const char *label) {
+    return profile_text_is_valid(label, ZMK_BLE_HOST_LABEL_MAX_LENGTH, true);
+}
 
 static struct bt_data zmk_ble_ad[] = {
     BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE, BT_BYTES_LIST_LE16(CONFIG_BT_DEVICE_APPEARANCE)),
@@ -296,7 +365,42 @@ int zmk_ble_studio_discovery_stop(void) {
 
 #endif /* CONFIG_ZMK_STUDIO_TRANSPORT_BLE */
 
-static void clear_profile_bond(uint8_t profile) {
+static int clear_profile_storage(uint8_t profile) {
+    int save_error = 0;
+#if IS_ENABLED(CONFIG_SETTINGS)
+    char setting_name[24];
+    snprintf(setting_name, sizeof(setting_name), "ble/profiles/%d", profile);
+    if (settings_delete(setting_name) != 0) {
+        save_error = -ENOSPC;
+    }
+    snprintf(setting_name, sizeof(setting_name), "ble/names/%d", profile);
+    if (settings_delete(setting_name) != 0) {
+        save_error = -ENOSPC;
+    }
+    snprintf(setting_name, sizeof(setting_name), "ble/host_labels/%d", profile);
+    if (settings_delete(setting_name) != 0) {
+        save_error = -ENOSPC;
+    }
+#endif
+    memset(&profiles[profile], 0, sizeof(profiles[profile]));
+    profile_names[profile][0] = '\0';
+    host_labels[profile][0] = '\0';
+    return save_error;
+}
+
+int zmk_ble_unpair_profile(uint8_t profile) {
+    if (profile >= ZMK_BLE_PROFILE_COUNT) {
+        return -ERANGE;
+    }
+
+    if (bt_addr_le_cmp(&profiles[profile].peer, BT_ADDR_LE_ANY)) {
+        int err = bt_unpair(BT_ID_DEFAULT, &profiles[profile].peer);
+        if (err) {
+            LOG_ERR("Failed to unpair profile %d (%d)", profile, err);
+            return -EIO;
+        }
+    }
+
 #if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
     /* Keep the host-selected multiplier across ordinary reconnects because a
      * bonded host may not rewrite a cached Feature Report on every BLE link.
@@ -305,17 +409,23 @@ static void clear_profile_bond(uint8_t profile) {
         .transport = ZMK_TRANSPORT_BLE, .ble = {.profile_index = profile}});
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
-    if (bt_addr_le_cmp(&profiles[profile].peer, BT_ADDR_LE_ANY)) {
-        bt_unpair(BT_ID_DEFAULT, &profiles[profile].peer);
-        set_profile_address(profile, BT_ADDR_LE_ANY);
+    int save_error = clear_profile_storage(profile);
+    int apply_error = 0;
+
+    if (profile == active_profile) {
+        apply_error = zmk_ble_set_device_name(DEVICE_NAME);
     }
+    k_work_submit(&raise_profile_changed_event_work);
+    return apply_error ? apply_error : save_error;
 }
 
 void zmk_ble_clear_bonds(void) {
     LOG_DBG("zmk_ble_clear_bonds()");
 
-    clear_profile_bond(active_profile);
-    update_advertising();
+    int err = zmk_ble_unpair_profile(active_profile);
+    if (err) {
+        LOG_ERR("Failed to clear active profile (%d)", err);
+    }
 };
 
 void zmk_ble_clear_all_bonds(void) {
@@ -323,12 +433,14 @@ void zmk_ble_clear_all_bonds(void) {
 
     // Unpair all profiles
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
-        clear_profile_bond(i);
+        int err = zmk_ble_unpair_profile(i);
+        if (err) {
+            LOG_ERR("Failed to clear profile %d (%d)", i, err);
+        }
     }
 
     // Automatically switch to profile 0
     zmk_ble_prof_select(0);
-    update_advertising();
 };
 
 int zmk_ble_active_profile_index(void) { return active_profile; }
@@ -375,10 +487,16 @@ int zmk_ble_prof_select(uint8_t index) {
         return 0;
     }
 
+    uint8_t previous_profile = active_profile;
     active_profile = index;
-    ble_save_profile();
+    int err = zmk_ble_set_device_name(zmk_ble_active_profile_name());
+    if (err) {
+        active_profile = previous_profile;
+        zmk_ble_set_device_name(zmk_ble_active_profile_name());
+        return err;
+    }
 
-    update_advertising();
+    ble_save_profile();
 
     raise_profile_changed_event();
 
@@ -434,10 +552,87 @@ struct bt_conn *zmk_ble_active_profile_conn(void) {
     return conn;
 }
 
-char *zmk_ble_active_profile_name(void) { return profiles[active_profile].name; }
+const char *zmk_ble_profile_name(uint8_t index) {
+    return index < ZMK_BLE_PROFILE_COUNT ? profile_names[index] : "";
+}
 
-int zmk_ble_set_device_name(char *name) {
+const char *zmk_ble_host_label(uint8_t index) {
+    return index < ZMK_BLE_PROFILE_COUNT ? host_labels[index] : "";
+}
+
+int zmk_ble_set_host_label(uint8_t index, const char *label) {
+    if (index >= ZMK_BLE_PROFILE_COUNT) {
+        return -ERANGE;
+    }
+    if (!host_label_is_valid(label)) {
+        return -EINVAL;
+    }
+    if (strcmp(host_labels[index], label) == 0) {
+        return 0;
+    }
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    char setting_name[24];
+    snprintf(setting_name, sizeof(setting_name), "ble/host_labels/%d", index);
+    int err = label[0] ? settings_save_one(setting_name, label, strlen(label) + 1)
+                       : settings_delete(setting_name);
+    if (err) {
+        LOG_ERR("Failed to save host label %d (%d)", index, err);
+        return -ENOSPC;
+    }
+#endif
+    strcpy(host_labels[index], label);
+    return 0;
+}
+
+const char *zmk_ble_active_profile_name(void) {
+    const char *name = zmk_ble_profile_name(active_profile);
+    return name[0] ? name : DEVICE_NAME;
+}
+
+int zmk_ble_set_profile_name(uint8_t index, const char *name) {
+    if (index >= ZMK_BLE_PROFILE_COUNT) {
+        return -ERANGE;
+    }
+    if (zmk_ble_profile_is_open(index) || !profile_name_is_valid(name)) {
+        return -EINVAL;
+    }
+    if (strcmp(profile_names[index], name) == 0) {
+        return 0;
+    }
+
+    char previous[CONFIG_BT_DEVICE_NAME_MAX + 1];
+    strcpy(previous, profile_names[index]);
+#if IS_ENABLED(CONFIG_SETTINGS)
+    char setting_name[24];
+    snprintf(setting_name, sizeof(setting_name), "ble/names/%d", index);
+    int err = settings_save_one(setting_name, name, strlen(name) + 1);
+    if (err) {
+        LOG_ERR("Failed to save profile name %d (%d)", index, err);
+        return -ENOSPC;
+    }
+#endif
+    strcpy(profile_names[index], name);
+    if (index == active_profile && zmk_ble_set_device_name(name) != 0) {
+        strcpy(profile_names[index], previous);
+#if IS_ENABLED(CONFIG_SETTINGS)
+        if (previous[0]) {
+            settings_save_one(setting_name, previous, strlen(previous) + 1);
+        } else {
+            settings_delete(setting_name);
+        }
+#endif
+        zmk_ble_set_device_name(zmk_ble_active_profile_name());
+        return -EIO;
+    }
+    return 0;
+}
+
+int zmk_ble_set_device_name(const char *name) {
     // Copy new name to advertising parameters
+    if (strcmp(bt_get_name(), name) == 0) {
+        return update_advertising();
+    }
     int err = bt_set_name(name);
     LOG_DBG("New device name: %s", name);
     if (err) {
@@ -506,8 +701,8 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
 
     if (settings_name_steq(name, "profiles", &next) && next) {
         char *endptr;
-        uint8_t idx = strtoul(next, &endptr, 10);
-        if (*endptr != '\0') {
+        unsigned long idx = strtoul(next, &endptr, 10);
+        if (*next == '\0' || *endptr != '\0') {
             LOG_WRN("Invalid profile index: %s", next);
             return -EINVAL;
         }
@@ -519,7 +714,7 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
         }
 
         if (idx >= ZMK_BLE_PROFILE_COUNT) {
-            LOG_WRN("Profile address for index %d is larger than max of %d", idx,
+            LOG_WRN("Profile address for index %lu is larger than max of %d", idx,
                     ZMK_BLE_PROFILE_COUNT);
             return -EINVAL;
         }
@@ -533,7 +728,41 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
         char addr_str[BT_ADDR_LE_STR_LEN];
         bt_addr_le_to_str(&profiles[idx].peer, addr_str, sizeof(addr_str));
 
-        LOG_DBG("Loaded %s address for profile %d", addr_str, idx);
+        LOG_DBG("Loaded %s address for profile %lu", addr_str, idx);
+    } else if (settings_name_steq(name, "names", &next) && next) {
+        char *endptr;
+        unsigned long idx = strtoul(next, &endptr, 10);
+        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT || len < 2 ||
+            len > sizeof(profile_names[0])) {
+            LOG_WRN("Invalid BLE profile name setting: %s", name);
+            return 0;
+        }
+
+        char loaded[CONFIG_BT_DEVICE_NAME_MAX + 1];
+        int err = read_cb(cb_arg, loaded, len);
+        if (err != len || loaded[len - 1] != '\0' || strnlen(loaded, len) != len - 1 ||
+            !profile_name_is_valid(loaded)) {
+            LOG_WRN("Ignoring invalid BLE profile name %lu", idx);
+            return 0;
+        }
+        strcpy(profile_names[idx], loaded);
+    } else if (settings_name_steq(name, "host_labels", &next) && next) {
+        char *endptr;
+        unsigned long idx = strtoul(next, &endptr, 10);
+        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT || len < 2 ||
+            len > sizeof(host_labels[0])) {
+            LOG_WRN("Invalid BLE host label setting: %s", name);
+            return 0;
+        }
+
+        char loaded[ZMK_BLE_HOST_LABEL_MAX_LENGTH + 1];
+        int err = read_cb(cb_arg, loaded, len);
+        if (err != len || loaded[len - 1] != '\0' || strnlen(loaded, len) != len - 1 ||
+            !host_label_is_valid(loaded)) {
+            LOG_WRN("Ignoring invalid BLE host label %lu", idx);
+            return 0;
+        }
+        strcpy(host_labels[idx], loaded);
     } else if (settings_name_steq(name, "active_profile", &next) && !next) {
         if (len != sizeof(active_profile)) {
             return -EINVAL;
@@ -767,24 +996,33 @@ static void zmk_ble_ready(int err) {
         return;
     }
 
-    update_advertising();
+    int name_err = zmk_ble_set_device_name(zmk_ble_active_profile_name());
+    if (name_err) {
+        LOG_ERR("Failed to apply BLE profile name (%d)", name_err);
+    }
 }
 
 static int zmk_ble_complete_startup(void) {
+
+    if (active_profile >= ZMK_BLE_PROFILE_COUNT) {
+        LOG_WRN("Invalid active BLE profile %d, using 0", active_profile);
+        active_profile = 0;
+    }
 
 #if IS_ENABLED(CONFIG_ZMK_BLE_CLEAR_BONDS_ON_START)
     LOG_WRN("Clearing all existing BLE bond information from the keyboard");
 
     bt_unpair(BT_ID_DEFAULT, NULL);
 
-    for (int i = 0; i < 8; i++) {
-        char setting_name[15];
-        sprintf(setting_name, "ble/profiles/%d", i);
-
-        int err = settings_delete(setting_name);
+    for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        int err = clear_profile_storage(i);
         if (err) {
-            LOG_ERR("Failed to delete setting: %d", err);
+            LOG_ERR("Failed to clear profile %d settings: %d", i, err);
         }
+    }
+    active_profile = 0;
+    if (settings_save_one("ble/active_profile", &active_profile, sizeof(active_profile)) != 0) {
+        LOG_ERR("Failed to reset active BLE profile setting");
     }
 
     // Hardcoding a reasonable hardcoded value of peripheral addresses
