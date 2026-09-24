@@ -732,16 +732,16 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
     } else if (settings_name_steq(name, "names", &next) && next) {
         char *endptr;
         unsigned long idx = strtoul(next, &endptr, 10);
-        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT ||
-            len < 2 || len > sizeof(profile_names[0])) {
+        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT || len < 2 ||
+            len > sizeof(profile_names[0])) {
             LOG_WRN("Invalid BLE profile name setting: %s", name);
             return 0;
         }
 
         char loaded[CONFIG_BT_DEVICE_NAME_MAX + 1];
         int err = read_cb(cb_arg, loaded, len);
-        if (err != len || loaded[len - 1] != '\0' ||
-            strnlen(loaded, len) != len - 1 || !profile_name_is_valid(loaded)) {
+        if (err != len || loaded[len - 1] != '\0' || strnlen(loaded, len) != len - 1 ||
+            !profile_name_is_valid(loaded)) {
             LOG_WRN("Ignoring invalid BLE profile name %lu", idx);
             return 0;
         }
@@ -749,16 +749,16 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
     } else if (settings_name_steq(name, "host_labels", &next) && next) {
         char *endptr;
         unsigned long idx = strtoul(next, &endptr, 10);
-        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT ||
-            len < 2 || len > sizeof(host_labels[0])) {
+        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT || len < 2 ||
+            len > sizeof(host_labels[0])) {
             LOG_WRN("Invalid BLE host label setting: %s", name);
             return 0;
         }
 
         char loaded[ZMK_BLE_HOST_LABEL_MAX_LENGTH + 1];
         int err = read_cb(cb_arg, loaded, len);
-        if (err != len || loaded[len - 1] != '\0' ||
-            strnlen(loaded, len) != len - 1 || !host_label_is_valid(loaded)) {
+        if (err != len || loaded[len - 1] != '\0' || strnlen(loaded, len) != len - 1 ||
+            !host_label_is_valid(loaded)) {
             LOG_WRN("Ignoring invalid BLE host label %lu", idx);
             return 0;
         }

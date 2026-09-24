@@ -53,7 +53,8 @@ static zmk_studio_Response get_profiles(const zmk_studio_Request *req) {
     response.slot_count = ZMK_BLE_PROFILE_COUNT;
     response.profiles.funcs.encode = encode_profiles;
     response.active_index = zmk_ble_active_profile_index();
-    response.preferred_transport = (zmk_ble_profiles_Transport)zmk_endpoint_get_preferred_transport();
+    response.preferred_transport =
+        (zmk_ble_profiles_Transport)zmk_endpoint_get_preferred_transport();
     response.selected_transport = (zmk_ble_profiles_Transport)zmk_endpoint_get_selected().transport;
     return BLE_PROFILES_RESPONSE(get_profiles, response);
 }
@@ -105,9 +106,8 @@ static zmk_studio_Response set_host_label(const zmk_studio_Request *req) {
         memcpy(label, input->host_label_utf8.bytes, input->host_label_utf8.size);
         label[input->host_label_utf8.size] = '\0';
         int err = zmk_ble_set_host_label(input->index, label);
-        response.error = err == -EINVAL
-                             ? zmk_ble_profiles_MutationError_MUTATION_INVALID_HOST_LABEL
-                             : map_profile_error(err);
+        response.error = err == -EINVAL ? zmk_ble_profiles_MutationError_MUTATION_INVALID_HOST_LABEL
+                                        : map_profile_error(err);
     }
     return BLE_PROFILES_RESPONSE(set_host_label, response);
 }
