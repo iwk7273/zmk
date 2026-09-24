@@ -21,6 +21,7 @@ ZMK_RPC_SUBSYSTEM(core)
 #define COMBOS_CONFIG_CAPABILITY "combos.config"
 #define MACROS_CONFIG_CAPABILITY "macros.config"
 #define BLE_PROFILES_CAPABILITY "meteorite.ble_profiles"
+#define BLE_HOST_LABELS_CAPABILITY "meteorite.ble_host_labels"
 #define KEYMAP_SENSOR_BINDINGS_CAPABILITY "keymap.sensor_bindings"
 #define KEYMAP_SENSOR_DIRECTION_BINDINGS_CAPABILITY "keymap.sensor_direction_bindings"
 
@@ -71,6 +72,7 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
 #endif
 #if IS_ENABLED(CONFIG_ZMK_BLE)
         BLE_PROFILES_CAPABILITY,
+        BLE_HOST_LABELS_CAPABILITY,
 #endif
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS
         KEYMAP_SENSOR_BINDINGS_CAPABILITY,

@@ -19,6 +19,8 @@
 #define ZMK_BLE_PROFILE_COUNT CONFIG_BT_MAX_PAIRED
 #endif
 
+#define ZMK_BLE_HOST_LABEL_MAX_LENGTH 64
+
 void zmk_ble_clear_bonds(void);
 int zmk_ble_prof_next(void);
 int zmk_ble_prof_prev(void);
@@ -26,6 +28,8 @@ int zmk_ble_prof_select(uint8_t index);
 int zmk_ble_unpair_profile(uint8_t index);
 int zmk_ble_set_profile_name(uint8_t index, const char *name);
 const char *zmk_ble_profile_name(uint8_t index);
+int zmk_ble_set_host_label(uint8_t index, const char *label);
+const char *zmk_ble_host_label(uint8_t index);
 void zmk_ble_clear_all_bonds(void);
 int zmk_ble_prof_disconnect(uint8_t index);
 

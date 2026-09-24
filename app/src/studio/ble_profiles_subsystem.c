@@ -30,6 +30,7 @@ static bool encode_profiles(pb_ostream_t *stream, const pb_field_t *field, void 
         zmk_ble_profiles_Profile profile = zmk_ble_profiles_Profile_init_zero;
         profile.index = index;
         strlcpy(profile.name, zmk_ble_profile_name(index), sizeof(profile.name));
+        strlcpy(profile.host_label, zmk_ble_host_label(index), sizeof(profile.host_label));
         profile.open = zmk_ble_profile_is_open(index);
         if (!profile.open) {
             bt_addr_le_to_str(zmk_ble_profile_address(index), profile.address,
@@ -90,6 +91,27 @@ static zmk_studio_Response set_name(const zmk_studio_Request *req) {
     return BLE_PROFILES_RESPONSE(set_name, response);
 }
 
+static zmk_studio_Response set_host_label(const zmk_studio_Request *req) {
+    const zmk_ble_profiles_SetHostLabelRequest *input =
+        &req->subsystem.ble_profiles.request_type.set_host_label;
+    zmk_ble_profiles_MutationResponse response = zmk_ble_profiles_MutationResponse_init_zero;
+    if (input->index >= ZMK_BLE_PROFILE_COUNT) {
+        response.error = zmk_ble_profiles_MutationError_MUTATION_INVALID_INDEX;
+    } else if (input->host_label_utf8.size > ZMK_BLE_HOST_LABEL_MAX_LENGTH ||
+               memchr(input->host_label_utf8.bytes, '\0', input->host_label_utf8.size) != NULL) {
+        response.error = zmk_ble_profiles_MutationError_MUTATION_INVALID_HOST_LABEL;
+    } else {
+        char label[ZMK_BLE_HOST_LABEL_MAX_LENGTH + 1];
+        memcpy(label, input->host_label_utf8.bytes, input->host_label_utf8.size);
+        label[input->host_label_utf8.size] = '\0';
+        int err = zmk_ble_set_host_label(input->index, label);
+        response.error = err == -EINVAL
+                             ? zmk_ble_profiles_MutationError_MUTATION_INVALID_HOST_LABEL
+                             : map_profile_error(err);
+    }
+    return BLE_PROFILES_RESPONSE(set_host_label, response);
+}
+
 static zmk_studio_Response select_profile(const zmk_studio_Request *req) {
     uint32_t index = req->subsystem.ble_profiles.request_type.select_profile.index;
     zmk_ble_profiles_MutationResponse response = zmk_ble_profiles_MutationResponse_init_zero;
@@ -125,6 +147,7 @@ static zmk_studio_Response set_preferred_transport(const zmk_studio_Request *req
 
 ZMK_RPC_SUBSYSTEM_HANDLER(ble_profiles, get_profiles, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(ble_profiles, set_name, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(ble_profiles, set_host_label, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(ble_profiles, select_profile, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(ble_profiles, unpair_profile, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(ble_profiles, set_preferred_transport, ZMK_STUDIO_RPC_HANDLER_SECURED);

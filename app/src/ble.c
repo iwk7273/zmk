@@ -71,6 +71,7 @@ enum advertising_type {
 static struct zmk_ble_profile profiles[ZMK_BLE_PROFILE_COUNT];
 /* Keep the existing ble/profiles/N binary layout unchanged. */
 static char profile_names[ZMK_BLE_PROFILE_COUNT][CONFIG_BT_DEVICE_NAME_MAX + 1];
+static char host_labels[ZMK_BLE_PROFILE_COUNT][ZMK_BLE_HOST_LABEL_MAX_LENGTH + 1];
 static uint8_t active_profile;
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
@@ -80,13 +81,13 @@ BUILD_ASSERT(
     DEVICE_NAME_LEN <= CONFIG_BT_DEVICE_NAME_MAX,
     "ERROR: BLE device name is too long. Max length: " STRINGIFY(CONFIG_BT_DEVICE_NAME_MAX));
 
-static bool profile_name_is_valid(const char *name) {
+static bool profile_text_is_valid(const char *name, size_t max_length, bool allow_empty) {
     if (!name) {
         return false;
     }
 
-    size_t length = strnlen(name, CONFIG_BT_DEVICE_NAME_MAX + 1);
-    if (length == 0 || length > CONFIG_BT_DEVICE_NAME_MAX) {
+    size_t length = strnlen(name, max_length + 1);
+    if ((!allow_empty && length == 0) || length > max_length) {
         return false;
     }
 
@@ -135,6 +136,14 @@ static bool profile_name_is_valid(const char *name) {
         i += continuation_count + 1;
     }
     return true;
+}
+
+static bool profile_name_is_valid(const char *name) {
+    return profile_text_is_valid(name, CONFIG_BT_DEVICE_NAME_MAX, false);
+}
+
+static bool host_label_is_valid(const char *label) {
+    return profile_text_is_valid(label, ZMK_BLE_HOST_LABEL_MAX_LENGTH, true);
 }
 
 static struct bt_data zmk_ble_ad[] = {
@@ -368,9 +377,14 @@ static int clear_profile_storage(uint8_t profile) {
     if (settings_delete(setting_name) != 0) {
         save_error = -ENOSPC;
     }
+    snprintf(setting_name, sizeof(setting_name), "ble/host_labels/%d", profile);
+    if (settings_delete(setting_name) != 0) {
+        save_error = -ENOSPC;
+    }
 #endif
     memset(&profiles[profile], 0, sizeof(profiles[profile]));
     profile_names[profile][0] = '\0';
+    host_labels[profile][0] = '\0';
     return save_error;
 }
 
@@ -542,6 +556,35 @@ const char *zmk_ble_profile_name(uint8_t index) {
     return index < ZMK_BLE_PROFILE_COUNT ? profile_names[index] : "";
 }
 
+const char *zmk_ble_host_label(uint8_t index) {
+    return index < ZMK_BLE_PROFILE_COUNT ? host_labels[index] : "";
+}
+
+int zmk_ble_set_host_label(uint8_t index, const char *label) {
+    if (index >= ZMK_BLE_PROFILE_COUNT) {
+        return -ERANGE;
+    }
+    if (!host_label_is_valid(label)) {
+        return -EINVAL;
+    }
+    if (strcmp(host_labels[index], label) == 0) {
+        return 0;
+    }
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    char setting_name[24];
+    snprintf(setting_name, sizeof(setting_name), "ble/host_labels/%d", index);
+    int err = label[0] ? settings_save_one(setting_name, label, strlen(label) + 1)
+                       : settings_delete(setting_name);
+    if (err) {
+        LOG_ERR("Failed to save host label %d (%d)", index, err);
+        return -ENOSPC;
+    }
+#endif
+    strcpy(host_labels[index], label);
+    return 0;
+}
+
 const char *zmk_ble_active_profile_name(void) {
     const char *name = zmk_ble_profile_name(active_profile);
     return name[0] ? name : DEVICE_NAME;
@@ -703,6 +746,23 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
             return 0;
         }
         strcpy(profile_names[idx], loaded);
+    } else if (settings_name_steq(name, "host_labels", &next) && next) {
+        char *endptr;
+        unsigned long idx = strtoul(next, &endptr, 10);
+        if (*next == '\0' || *endptr != '\0' || idx >= ZMK_BLE_PROFILE_COUNT ||
+            len < 2 || len > sizeof(host_labels[0])) {
+            LOG_WRN("Invalid BLE host label setting: %s", name);
+            return 0;
+        }
+
+        char loaded[ZMK_BLE_HOST_LABEL_MAX_LENGTH + 1];
+        int err = read_cb(cb_arg, loaded, len);
+        if (err != len || loaded[len - 1] != '\0' ||
+            strnlen(loaded, len) != len - 1 || !host_label_is_valid(loaded)) {
+            LOG_WRN("Ignoring invalid BLE host label %lu", idx);
+            return 0;
+        }
+        strcpy(host_labels[idx], loaded);
     } else if (settings_name_steq(name, "active_profile", &next) && !next) {
         if (len != sizeof(active_profile)) {
             return -EINVAL;
