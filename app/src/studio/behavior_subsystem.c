@@ -11,6 +11,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/studio/rpc.h>
 #include <drivers/behavior.h>
 #include <zmk/hid.h>
+#include "fast_hash.h"
 
 ZMK_RPC_SUBSYSTEM(behaviors)
 
@@ -163,19 +164,15 @@ static bool encode_behavior_name(pb_ostream_t *stream, const pb_field_t *field, 
 
 static struct encode_metadata_sets_state state = {};
 
-zmk_studio_Response get_behavior_details(const zmk_studio_Request *req) {
-    uint32_t behavior_id = req->subsystem.behaviors.request_type.get_behavior_details.behavior_id;
+static bool populate_behavior_detail(uint32_t behavior_id,
+                                     zmk_behaviors_GetBehaviorDetailsResponse *resp,
+                                     struct encode_metadata_sets_state *metadata_state) {
     const char *behavior_name = zmk_behavior_find_behavior_name_from_local_id(behavior_id);
-
-    LOG_DBG("behavior_id %d, name %s", behavior_id, behavior_name);
-
     if (!behavior_name) {
-        LOG_WRN("No behavior found for ID %d", behavior_id);
-        return ZMK_RPC_SIMPLE_ERR(GENERIC);
+        return false;
     }
 
     const struct device *device = behavior_get_binding(behavior_name);
-
     struct zmk_behavior_ref *zbm = NULL;
     STRUCT_SECTION_FOREACH(zmk_behavior_ref, item) {
         if (item->device == device) {
@@ -183,31 +180,65 @@ zmk_studio_Response get_behavior_details(const zmk_studio_Request *req) {
             break;
         }
     }
-
-    __ASSERT(zbm != NULL, "Can't find a device without also having metadata");
-
-    struct behavior_parameter_metadata desc = {0};
-    int ret = behavior_get_parameter_metadata(device, &desc);
-    if (ret < 0) {
-        LOG_DBG("Failed to fetch the metadata for %s! %d", zbm->metadata.display_name, ret);
-    } else {
-        LOG_DBG("Got metadata with %d sets", desc.sets_len);
+    if (!zbm) {
+        return false;
     }
 
+    struct behavior_parameter_metadata desc = {0};
+    if (behavior_get_parameter_metadata(device, &desc) < 0) {
+        LOG_DBG("No parameter metadata for %s", zbm->metadata.display_name);
+    }
+
+    resp->id = behavior_id;
+    resp->display_name.funcs.encode = encode_behavior_name;
+    resp->display_name.arg = zbm;
+    metadata_state->sets = desc.sets;
+    metadata_state->sets_len = desc.sets_len;
+    resp->metadata.funcs.encode = encode_metadata_sets;
+    resp->metadata.arg = metadata_state;
+    return true;
+}
+
+zmk_studio_Response get_behavior_details(const zmk_studio_Request *req) {
+    uint32_t behavior_id = req->subsystem.behaviors.request_type.get_behavior_details.behavior_id;
     zmk_behaviors_GetBehaviorDetailsResponse resp =
         zmk_behaviors_GetBehaviorDetailsResponse_init_zero;
-    resp.id = behavior_id;
-    resp.display_name.funcs.encode = encode_behavior_name;
-    resp.display_name.arg = zbm;
-
-    state.sets = desc.sets;
-    state.sets_len = desc.sets_len;
-
-    resp.metadata.funcs.encode = encode_metadata_sets;
-    resp.metadata.arg = &state;
+    if (!populate_behavior_detail(behavior_id, &resp, &state)) {
+        LOG_WRN("No behavior found for ID %d", behavior_id);
+        return ZMK_RPC_SIMPLE_ERR(GENERIC);
+    }
 
     return BEHAVIOR_RESPONSE(get_behavior_details, resp);
 }
 
+static bool encode_all_behavior_details(pb_ostream_t *stream, const pb_field_t *field,
+                                        void *const *arg) {
+    STRUCT_SECTION_FOREACH(zmk_behavior_local_id_map, beh) {
+        zmk_behaviors_GetBehaviorDetailsResponse detail =
+            zmk_behaviors_GetBehaviorDetailsResponse_init_zero;
+        struct encode_metadata_sets_state metadata_state = {};
+        if (!populate_behavior_detail(beh->local_id, &detail, &metadata_state) ||
+            !pb_encode_tag_for_field(stream, field) ||
+            !pb_encode_submessage(stream, &zmk_behaviors_GetBehaviorDetailsResponse_msg, &detail)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool zmk_studio_behavior_fingerprint(uint64_t *fingerprint) {
+    zmk_behaviors_AllBehaviorDetails details = zmk_behaviors_AllBehaviorDetails_init_zero;
+    details.behaviors.funcs.encode = encode_all_behavior_details;
+    pb_ostream_t stream = studio_fast_hash_stream(fingerprint);
+    return pb_encode(&stream, &zmk_behaviors_AllBehaviorDetails_msg, &details);
+}
+
+zmk_studio_Response get_all_behavior_details(const zmk_studio_Request *req) {
+    zmk_behaviors_AllBehaviorDetails details = zmk_behaviors_AllBehaviorDetails_init_zero;
+    details.behaviors.funcs.encode = encode_all_behavior_details;
+    return BEHAVIOR_RESPONSE(get_all_behavior_details, details);
+}
+
 ZMK_RPC_SUBSYSTEM_HANDLER(behaviors, list_all_behaviors, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(behaviors, get_behavior_details, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(behaviors, get_all_behavior_details, ZMK_STUDIO_RPC_HANDLER_SECURED);
