@@ -24,6 +24,7 @@ ZMK_RPC_SUBSYSTEM(core)
 #define BLE_HOST_LABELS_CAPABILITY "meteorite.ble_host_labels"
 #define KEYMAP_SENSOR_BINDINGS_CAPABILITY "keymap.sensor_bindings"
 #define KEYMAP_SENSOR_DIRECTION_BINDINGS_CAPABILITY "keymap.sensor_direction_bindings"
+#define FAST_KEYMAP_CAPABILITY "keymap.fast_snapshot.v1"
 
 static bool encode_device_info_name(pb_ostream_t *stream, const pb_field_t *field,
                                     void *const *arg) {
@@ -61,6 +62,7 @@ static bool encode_device_info_capabilities(pb_ostream_t *stream, const pb_field
     IS_ENABLED(CONFIG_ZMK_MACRO_SETTINGS) || IS_ENABLED(CONFIG_ZMK_BLE) ||                         \
     (IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE) && ZMK_KEYMAP_HAS_SENSORS)
     const char *capabilities[] = {
+        FAST_KEYMAP_CAPABILITY,
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_CONFIG)
         METEORITE_CONFIG_CAPABILITY,
 #endif

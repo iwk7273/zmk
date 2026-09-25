@@ -20,6 +20,9 @@ LOG_MODULE_DECLARE(zmk_studio, CONFIG_ZMK_STUDIO_LOG_LEVEL);
 #include <zmk/physical_layouts.h>
 
 #include <pb_encode.h>
+#include "fast_hash.h"
+
+bool zmk_studio_behavior_fingerprint(uint64_t *fingerprint);
 
 ZMK_RPC_SUBSYSTEM(keymap)
 
@@ -191,6 +194,79 @@ static void populate_keymap_extra_props(zmk_keymap_Keymap *keymap) {
             break;
         }
     }
+}
+
+static uint32_t active_layer_count(void) {
+    uint32_t count = 0;
+    while (count < ZMK_KEYMAP_LAYERS_LEN && zmk_keymap_layer_index_to_id(count) != UINT8_MAX) {
+        count++;
+    }
+    return count;
+}
+
+static bool hash_layer(zmk_keymap_layer_id_t layer_id, uint64_t *fingerprint) {
+    zmk_keymap_Layer layer = zmk_keymap_Layer_init_zero;
+    populate_layer(&layer, &layer_id);
+    pb_ostream_t stream = studio_fast_hash_stream(fingerprint);
+    return pb_encode(&stream, &zmk_keymap_Layer_msg, &layer);
+}
+
+static bool encode_layer_fingerprints(pb_ostream_t *stream, const pb_field_t *field,
+                                      void *const *arg) {
+    for (uint32_t index = 0; index < active_layer_count(); index++) {
+        zmk_keymap_layer_id_t id = zmk_keymap_layer_index_to_id(index);
+        uint64_t fingerprint = 0;
+        if (!hash_layer(id, &fingerprint)) {
+            return false;
+        }
+        zmk_keymap_LayerFingerprint entry = zmk_keymap_LayerFingerprint_init_zero;
+        entry.id = id;
+        entry.hash_low = (uint32_t)fingerprint;
+        entry.hash_high = (uint32_t)(fingerprint >> 32);
+        if (!pb_encode_tag_for_field(stream, field) ||
+            !pb_encode_submessage(stream, &zmk_keymap_LayerFingerprint_msg, &entry)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct fast_layers_state {
+    uint32_t start_index;
+    uint32_t count;
+};
+
+static struct fast_layers_state fast_layers_response_state;
+
+static bool encode_fast_layers(pb_ostream_t *stream, const pb_field_t *field, void *const *arg) {
+    const struct fast_layers_state *state = (const struct fast_layers_state *)*arg;
+    for (uint32_t i = state->start_index; i < state->start_index + state->count; i++) {
+        zmk_keymap_layer_id_t id = zmk_keymap_layer_index_to_id(i);
+        zmk_keymap_Layer layer = zmk_keymap_Layer_init_zero;
+        populate_layer(&layer, &id);
+        if (!pb_encode_tag_for_field(stream, field) ||
+            !pb_encode_submessage(stream, &zmk_keymap_Layer_msg, &layer)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+zmk_studio_Response get_fast_layers(const zmk_studio_Request *req) {
+    const zmk_keymap_GetFastLayersRequest *request =
+        &req->subsystem.keymap.request_type.get_fast_layers;
+    uint32_t layer_count = active_layer_count();
+    if (request->count == 0 || request->start_index >= layer_count ||
+        request->count > layer_count - request->start_index) {
+        return ZMK_RPC_SIMPLE_ERR(GENERIC);
+    }
+
+    fast_layers_response_state.start_index = request->start_index;
+    fast_layers_response_state.count = request->count;
+    zmk_keymap_FastLayers response = zmk_keymap_FastLayers_init_zero;
+    response.layers.funcs.encode = encode_fast_layers;
+    response.layers.arg = &fast_layers_response_state;
+    return KEYMAP_RESPONSE(get_fast_layers, response);
 }
 
 zmk_studio_Response get_keymap(const zmk_studio_Request *req) {
@@ -595,6 +671,36 @@ zmk_studio_Response get_physical_layouts(const zmk_studio_Request *req) {
     return KEYMAP_RESPONSE(get_physical_layouts, resp);
 }
 
+zmk_studio_Response get_fast_snapshot(const zmk_studio_Request *req) {
+    zmk_keymap_FastSnapshot response = zmk_keymap_FastSnapshot_init_zero;
+    zmk_keymap_Keymap keymap = zmk_keymap_Keymap_init_zero;
+    populate_keymap_extra_props(&keymap);
+    response.protocol_version = 1;
+    response.available_layers = keymap.available_layers;
+    response.max_layer_name_length = keymap.max_layer_name_length;
+    response.active_layout_index = zmk_physical_layouts_get_selected();
+    response.unsaved_changes = zmk_physical_layouts_check_unsaved_selection() > 0 ||
+                               zmk_keymap_check_unsaved_changes() > 0;
+
+    zmk_keymap_PhysicalLayouts layouts = zmk_keymap_PhysicalLayouts_init_zero;
+    layouts.active_layout_index = response.active_layout_index;
+    layouts.layouts.funcs.encode = encode_layouts;
+    uint64_t hash = 0;
+    pb_ostream_t hash_stream = studio_fast_hash_stream(&hash);
+    if (!pb_encode(&hash_stream, &zmk_keymap_PhysicalLayouts_msg, &layouts)) {
+        return ZMK_RPC_SIMPLE_ERR(GENERIC);
+    }
+    response.layouts_hash_low = (uint32_t)hash;
+    response.layouts_hash_high = (uint32_t)(hash >> 32);
+    if (!zmk_studio_behavior_fingerprint(&hash)) {
+        return ZMK_RPC_SIMPLE_ERR(GENERIC);
+    }
+    response.behaviors_hash_low = (uint32_t)hash;
+    response.behaviors_hash_high = (uint32_t)(hash >> 32);
+    response.layers.funcs.encode = encode_layer_fingerprints;
+    return KEYMAP_RESPONSE(get_fast_snapshot, response);
+}
+
 zmk_studio_Response set_active_physical_layout(const zmk_studio_Request *req) {
     LOG_DBG("");
     uint8_t index = (uint8_t)req->subsystem.keymap.request_type.set_active_physical_layout;
@@ -794,6 +900,8 @@ ZMK_RPC_SUBSYSTEM_HANDLER(keymap, check_unsaved_changes, ZMK_STUDIO_RPC_HANDLER_
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, save_changes, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, discard_changes, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, get_physical_layouts, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(keymap, get_fast_snapshot, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(keymap, get_fast_layers, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, set_active_physical_layout, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, move_layer, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(keymap, add_layer, ZMK_STUDIO_RPC_HANDLER_SECURED);
